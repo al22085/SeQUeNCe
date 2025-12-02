@@ -43,6 +43,8 @@ class Transducer(Entity):
         self.photon_counter = 0
         self.up_conversion_protocol = None
         self.down_conversion_protocol = None 
+        self.last_up_success: bool | None = None
+        self.last_down_success: bool | None = None
         
 
     def init(self):
@@ -67,6 +69,37 @@ class Transducer(Entity):
         self.photon_counter += 1
         self.down_conversion_protocol.convert(photon)
 
+    def route_up_success(self, photon: Photon) -> None:
+        """Route photon after successful up-conversion.
+
+        Expected: _receivers[0] is the optical channel (or next component).
+        """
+        self.last_up_success = True
+        self._receivers[0].transmit(photon)
+    
+    def route_up_failure(self, photon: Photon) -> None:
+        """Route photon after failed up-conversion.
+
+        Expected: _receivers[1] is the failure path (e.g., local sink).
+        """
+        self.last_up_success = False
+        self._receivers[1].get(photon)
+
+    def route_down_success(self, photon: Photon) -> None:
+        """Route photon after successful down-conversion.
+
+        Expected: _receivers[0] is the microwave sink (e.g., Transmon).
+        """
+        self.last_down_success = True
+        self._receivers[0].get(photon)
+
+    def route_down_failure(self, photon: Photon) -> None:
+        """Route photon after failed down-conversion.
+
+        Expected: _receivers[1] is the failure path.
+        """
+        self.last_down_success = False
+        self._receivers[1].get(photon)
 
 
 def get_conversion_matrix(efficiency: float) -> Qobj:
@@ -120,10 +153,10 @@ class UpConversionProtocol(Protocol):
             photon.wavelength = OPTICAL_WAVELENGTH
             print("Successful up-conversion")
             print(f"The photon is: {photon} with wavelength: {photon.wavelength} at time {self.tl.now()}")
-            self.transducer._receivers[0].transmit(photon)
+            self.transducer.route_up_success(photon)
         else:
             photon.wavelength = MICROWAVE_WAVELENGTH
-            self.transducer._receivers[1].get(photon)
+            self.transducer.route_up_failure(photon)
             print("FAILED up-conversion")
 
     def received_message(self, src: str, msg):
@@ -163,10 +196,10 @@ class DownConversionProtocol(Protocol):
             print("Successful down-conversion")
             print(f"The photon is: {photon} with wavelength: {photon.wavelength}")
             print(f"Transducer receiver: {self.transducer._receivers[0]}")
-            self.transducer._receivers[0].get(photon)
+            self.transducer.route_down_success(photon)
         else:
             photon.wavelength = OPTICAL_WAVELENGTH
-            self.transducer._receivers[1].get(photon)
+            self.transducer.route_down_failure(photon)
             print("FAILED down-conversion")
             print(f"Transducer receiver: {self.transducer._receivers[1]}")
 

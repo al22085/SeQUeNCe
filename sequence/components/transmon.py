@@ -43,6 +43,7 @@ class Transmon(Entity):
         self.photons_quantum_state = photons_quantum_state 
         self.efficiency = efficiency
         self.input_quantum_state = None
+        self.last_emission_success: bool | None = None
               
     def init(self):
         pass
@@ -101,11 +102,14 @@ class EmittingProtocol(Protocol):
 
         if self.transmon.photons_quantum_state[0] == KET1:
             if random.random() < self.transmon.efficiency:
+                self.transmon.last_emission_success = True
                 print(f"Transmon receiver " + str(self.transmon._receivers[0]))
                 self.transmon._receivers[0].receive_photon_from_transmon(photon)
             else:
+                self.transmon.last_emission_success = False
                 print("Photon emission failed due to transmon efficiency")
         else:
+            self.transmon.last_emission_success = False
             print("The transmon is in the state 00, or 01, it doesn't emit microwave photons")
         
     def received_message(self, src: str, msg):
