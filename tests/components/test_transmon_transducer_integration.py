@@ -26,7 +26,7 @@ from sequence.components.transducer import (
 
 
 # =============================================================================
-# Helper utilities / dummy classes for tests
+# Common helpers / dummy classes
 # =============================================================================
 
 
@@ -84,7 +84,7 @@ class DummyTransducer(Transducer):
 
 
 # =============================================================================
-# Transmon.generation() のテスト
+# Transmon.generation() unit tests
 # =============================================================================
 
 
@@ -124,7 +124,7 @@ def test_transmon_generation_sets_input_state_and_returns_microwave_photon() -> 
 
 
 # =============================================================================
-# EmittingProtocol + Transducer (up-conversion) のテスト
+# EmittingProtocol + Transducer (up-conversion) unit tests
 # =============================================================================
 
 
@@ -225,7 +225,7 @@ def test_emitting_protocol_failure_flag() -> None:
 
 
 # =============================================================================
-# DownConversionProtocol のテスト
+# DownConversionProtocol unit tests
 # =============================================================================
 
 
@@ -283,3 +283,172 @@ def test_down_conversion_success_and_failure() -> None:
     assert failure_sink.received_photon is photon2
     # 失敗時は波長が変わらない（光モードのまま）こと
     assert photon2.wavelength == OPTICAL_WAVELENGTH
+
+
+# ============================================================
+# 1-link Direct Quantum Transduction (DQT) integration tests
+# ============================================================
+
+
+class DummyChannel:
+    """
+    簡易光チャネル。
+
+    transmit(photon) が呼ばれたら、その場で receiver.get(photon) を呼ぶだけ。
+    中継ノードや遅延などは無視して、「配線が正しいか」の確認にフォーカスする。
+    """
+
+    def __init__(self) -> None:
+        self.receiver = None
+        self.transmitted_photons: list[Photon] = []
+
+    def add_receiver(self, receiver) -> None:
+        self.receiver = receiver
+
+    def transmit(self, photon: Photon) -> None:
+        assert self.receiver is not None, "DummyChannel has no receiver"
+        self.transmitted_photons.append(photon)
+        self.receiver.get(photon)
+
+
+class DummySink:
+    """失敗パス用のダミーシンク。get が呼ばれた photon を全部保存する。"""
+
+    def __init__(self) -> None:
+        self.photons: list[Photon] = []
+
+    def get(self, photon: Photon) -> None:
+        self.photons.append(photon)
+
+
+def build_direct_qt_link(
+    eff_transmon: float = 1.0,
+    eff_up: float = 1.0,
+    eff_down: float = 1.0,
+):
+    """
+    1 本の Direct Quantum Transduction (DQT) ルートを組み立てて、
+    関連オブジェクトを dict で返すユーティリティ。
+
+    n1: 送信ノード
+      Transmon(tx_transmon) --(EmittingProtocol)--> Transducer(tx_transducer, UpConversion)
+
+    n2: 受信ノード
+      Transducer(rx_transducer, DownConversion) --> Transmon(rx_transmon)
+
+    中間は DummyChannel:
+      tx_transducer 成功ポート -> DummyChannel -> rx_transducer
+      tx_transducer 失敗ポート -> up_fail_sink
+      rx_transducer 失敗ポート -> down_fail_sink
+    """
+
+    tl = Timeline()
+    n1 = Node("n1", tl)
+    n2 = Node("n2", tl)
+
+    wavelengths = [MICROWAVE_WAVELENGTH, OPTICAL_WAVELENGTH]
+    photons_quantum_state = [KET1, KET0]
+
+    # -------- 送信側 --------
+    tx_transmon = Transmon(
+        owner=n1,
+        name="t_tx",
+        timeline=tl,
+        wavelengths=wavelengths,
+        photon_counter=0,
+        photons_quantum_state=photons_quantum_state,
+        efficiency=eff_transmon,
+    )
+    tx_transducer = Transducer(n1, "d_tx", tl, efficiency=eff_up)
+
+    # -------- 受信側 --------
+    rx_transmon = Transmon(
+        owner=n2,
+        name="t_rx",
+        timeline=tl,
+        wavelengths=wavelengths,
+        photon_counter=0,
+        photons_quantum_state=photons_quantum_state,
+        efficiency=eff_down,
+    )
+    rx_transducer = Transducer(n2, "d_rx", tl, efficiency=eff_down)
+
+    # -------- プロトコル --------
+    emit_proto = EmittingProtocol(n1, "emit", tl, tx_transmon, tx_transducer)
+    up_proto = UpConversionProtocol(n1, "up", tl, tx_transducer)
+    down_proto = DownConversionProtocol(n2, "down", tl, rx_transducer)
+
+    tx_transducer.up_conversion_protocol = up_proto
+    rx_transducer.down_conversion_protocol = down_proto
+
+    # -------- 配線 --------
+    # (1) Tx Transmon -> Tx Transducer
+    tx_transmon.add_outputs([tx_transducer])
+
+    # (2) Tx Transducer 成功ポート -> DummyChannel, 失敗ポート -> up_fail_sink
+    channel = DummyChannel()
+    up_fail_sink = DummySink()
+    tx_transducer.add_outputs([channel, up_fail_sink])
+
+    # (3) DummyChannel -> Rx Transducer
+    channel.add_receiver(rx_transducer)
+
+    # (4) Rx Transducer 成功ポート -> Rx Transmon, 失敗ポート -> down_fail_sink
+    down_fail_sink = DummySink()
+    rx_transducer.add_outputs([rx_transmon, down_fail_sink])
+
+    return {
+        "timeline": tl,
+        "nodes": (n1, n2),
+        "tx_transmon": tx_transmon,
+        "tx_transducer": tx_transducer,
+        "rx_transmon": rx_transmon,
+        "rx_transducer": rx_transducer,
+        "emit_proto": emit_proto,
+        "up_fail_sink": up_fail_sink,
+        "down_fail_sink": down_fail_sink,
+        "channel": channel,
+    }
+
+
+def test_direct_qt_link_success_all_eff_1() -> None:
+    """Transmon・Up/Down すべて効率 1 のとき、受信 Transmon が必ず 1 回受信する。"""
+    ctx = build_direct_qt_link(eff_transmon=1.0, eff_up=1.0, eff_down=1.0)
+    emit_proto = ctx["emit_proto"]
+    rx_transmon = ctx["rx_transmon"]
+
+    # 事前に受信していないことを確認
+    assert rx_transmon.photon_counter == 0
+
+    emit_proto.start()
+
+    # Emitting -> Up -> Channel -> Down -> Rx Transmon まで通っているはず
+    assert rx_transmon.photon_counter == 1
+    assert ctx["up_fail_sink"].photons == []
+    assert ctx["down_fail_sink"].photons == []
+
+
+def test_direct_qt_link_failure_in_up_conversion() -> None:
+    """Up-conversion 効率 0 のとき、受信 Transmon には届かず up_fail_sink に流れる。"""
+    ctx = build_direct_qt_link(eff_transmon=1.0, eff_up=0.0, eff_down=1.0)
+    emit_proto = ctx["emit_proto"]
+    rx_transmon = ctx["rx_transmon"]
+    up_fail_sink = ctx["up_fail_sink"]
+
+    emit_proto.start()
+
+    assert rx_transmon.photon_counter == 0
+    assert len(up_fail_sink.photons) == 1
+
+
+def test_direct_qt_link_failure_in_down_conversion() -> None:
+    """Down-conversion 効率 0 のとき、受信 Transmon には届かず down_fail_sink に流れる。"""
+    ctx = build_direct_qt_link(eff_transmon=1.0, eff_up=1.0, eff_down=0.0)
+    emit_proto = ctx["emit_proto"]
+    rx_transmon = ctx["rx_transmon"]
+    down_fail_sink = ctx["down_fail_sink"]
+
+    emit_proto.start()
+
+    assert rx_transmon.photon_counter == 0
+    assert len(down_fail_sink.photons) == 1
