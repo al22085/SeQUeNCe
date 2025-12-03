@@ -34,3 +34,6 @@ BELL_DIAGONAL_STATE_FORMALISM: Final = "bell_diagonal"
 # Built-In Generation Protocols
 BARRET_KOK: Final = 'barret_kok'
 SINGLE_HERALDED: Final = 'single_heralded'
+
+DQT = "DQT"      # Direct Quantum Transduction based entanglement generation
+EDQT = "EDQT"    # Entanglement-assisted DQT
