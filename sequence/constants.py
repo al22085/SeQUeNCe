@@ -37,3 +37,4 @@ SINGLE_HERALDED: Final = 'single_heralded'
 
 DQT = "DQT"      # Direct Quantum Transduction based entanglement generation
 EDQT = "EDQT"    # Entanglement-assisted DQT
+EQT = "EQT"      # Entanglement-assisted Quantum Transduction entanglement generation

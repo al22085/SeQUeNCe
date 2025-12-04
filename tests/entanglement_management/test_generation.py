@@ -1,6 +1,6 @@
 import numpy as np
 
-from sequence.constants import BARRET_KOK
+from sequence.constants import BARRET_KOK, DQT
 from sequence.components.bsm import *
 from sequence.components.memory import MemoryArray
 from sequence.components.optical_channel import *
@@ -230,6 +230,107 @@ def test_generation_run():
     ratio = empty_count / NUM_TESTS
     assert abs(ratio - 0.5) < 0.1
     
+
+def test_generation_run_dqt():
+    """DQT をグローバルタイプにした状態で、BK と同じトポロジ・パラメータで
+    エンタングル生成が動き、統計的にも同程度の成功率になることを確認する。
+    """
+    # DQT プロトコルを registry に登録（デコレータ実行）させるための import
+    import sequence.entanglement_management.generation.qt_dq  # noqa: F401
+
+    NUM_TESTS = 100
+
+    # グローバルタイプを退避して DQT に切り替え
+    old_a = EntanglementGenerationA.get_global_type()
+    old_b = EntanglementGenerationB.get_global_type()
+    EntanglementGenerationA.set_global_type(DQT)
+    EntanglementGenerationB.set_global_type(DQT)
+
+    try:
+        tl = Timeline()
+
+        e0 = FakeRouter("e0", tl)
+        m0 = FakeBSMNode("m0", tl)
+        e1 = FakeRouter("e1", tl)
+        e0.set_seed(0)
+        m0.set_seed(1)
+        e1.set_seed(2)
+
+        # add connections (BK と同じ)
+        qc0 = QuantumChannel("qc_e0m0", tl, 0, 1e3)
+        qc1 = QuantumChannel("qc_e1m0", tl, 0, 1e3)
+        qc0.set_ends(e0, m0.name)
+        qc1.set_ends(e1, m0.name)
+
+        for src in [e0, e1, m0]:
+            for dst in [e0, e1, m0]:
+                if src.name != dst.name:
+                    cc = ClassicalChannel("cc_%s_%s" % (src.name, dst.name), tl, 1e3, delay=1e9)
+                    cc.set_ends(src, dst.name)
+
+        # add hardware (BK と同じ)
+        e0.memory_array = MemoryArray("e0.memory_array", tl, num_memories=NUM_TESTS)
+        e0.memory_array.owner = e0
+        e1.memory_array = MemoryArray("e1.memory_array", tl, num_memories=NUM_TESTS)
+        e1.memory_array.owner = e1
+        detectors = [{"efficiency": 1, "count_rate": 1e11}] * 2
+        m0.bsm = make_bsm("m0.bsm", tl, encoding_type="single_atom", detectors=detectors)
+        m0.bsm.owner = m0
+
+        # add middle protocol（ここも create 経由なので DQT になる）
+        eg_m0 = EntanglementGenerationB.create(m0, "eg_m0_dqt", others=["e0", "e1"])
+        m0.bsm.attach(eg_m0)
+
+        tl.init()
+
+        protocols_e0 = []
+        protocols_e1 = []
+
+        for i in range(NUM_TESTS):
+            # 名前だけ被らないように少し変えておく
+            name0, name1 = [f"eg_dqt_e{j}[{i}]" for j in range(2)]
+            protocol0 = EntanglementGenerationA.create(e0, name0, middle="m0", other="e1", memory=e0.memory_array[i])
+            e0.protocols.append(protocol0)
+            protocols_e0.append(protocol0)
+            protocol1 = EntanglementGenerationA.create(e1, name1, middle="m0", other="e0", memory=e1.memory_array[i])
+            e1.protocols.append(protocol1)
+            protocols_e1.append(protocol1)
+            protocol0.set_others(protocol1.name, e1.name, [e1.memory_array[i].name])
+            protocol1.set_others(protocol0.name, e0.name, [e0.memory_array[i].name])
+
+            for protocol in [protocols_e0[i], protocols_e1[i]]:
+                process = Process(protocol, "start", [])
+                event = Event(i * 1e12, process)
+                tl.schedule(event)
+
+        tl.run()
+
+        # ここから先のアサーションも BK とほぼ同じロジック
+        assert len(e0.resource_manager.log) == NUM_TESTS
+        assert len(e1.resource_manager.log) == NUM_TESTS
+        empty_count = 0
+        for i in range(NUM_TESTS):
+            state0 = e0.resource_manager.log[i][1]
+            if state0 == "RAW":
+                empty_count += 1
+            else:
+                assert state0 == "ENTANGLED"
+                memory0 = e0.resource_manager.log[i][0]
+                memory1 = e1.resource_manager.log[i][0]
+                assert memory0.fidelity == memory0.raw_fidelity
+                assert memory1.fidelity == memory1.raw_fidelity
+                assert memory0.entangled_memory["node_id"] == e1.name
+                assert memory1.entangled_memory["node_id"] == e0.name
+
+        ratio = empty_count / NUM_TESTS
+        # BK と同じく「だいたい 0.5」になっていることを確認
+        assert abs(ratio - 0.5) < 0.1
+
+    finally:
+        # 他のテストに影響しないようにグローバルタイプを戻す
+        EntanglementGenerationA.set_global_type(old_a)
+        EntanglementGenerationB.set_global_type(old_b)
+
 
 def test_generation_fidelity_ket():
     NUM_TESTS = 100
