@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         "--num-trials",
         type=int,
         default=20,
-        help="試行回数 (= 予約するメモリペア数)",
+        help="試行回数: fixed_successes は目標成功数、fixed_attempts は試行回数、fixed_time はメモリ数の目安。",
     )
     parser.add_argument(
         "--seed",
@@ -100,6 +100,18 @@ def parse_args() -> argparse.Namespace:
         choices=["md", "csv", "json"],
         default="md",
         help="標準出力に出す形式。md=Markdown テーブル。",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["fixed_successes", "fixed_attempts", "fixed_time"],
+        default="fixed_successes",
+        help="attempt 定義を明示: fixed_successes=成功 N 回達成まで, fixed_attempts=試行 N 回まで, fixed_time=stop_time まで走らせる。",
+    )
+    parser.add_argument(
+        "--stop-time",
+        type=float,
+        default=5e12,
+        help="fixed_time モード時のタイムライン stop_time（ピコ秒）。他のモードでは安全上限として使用。",
     )
     return parser.parse_args()
 
@@ -205,6 +217,8 @@ def run_experiment(
     eta_dest: float,
     qt_eff: float,
     distance: float,
+    mode: str,
+    stop_time: float,
 ) -> dict[str, float | int | str | float]:
     """指定戦略でシミュレーションを走らせ、簡易可用性を返す。"""
     protocol_type = set_strategy(strategy)
@@ -236,17 +250,23 @@ def run_experiment(
 
     successes = 0
     failures = 0
-    processed = 0
     batch_size = 50  # 一度に走らせるメモリ数（大きすぎるとタイムラインが重いので分割）
+    target_successes = num_trials if mode == "fixed_successes" else None
+    target_attempts = num_trials if mode == "fixed_attempts" else None
 
-    while processed < num_trials:
-        batch_mem = min(batch_size, num_trials - processed)
-        tl = Timeline(stop_time=int(5e12))  # 長すぎるイベント列を避けるためタイムアウトを設定
-        batch_seed = None if seed is None else seed + processed
-        e0, e1, _ = build_line_network(tl, batch_mem, base_seed=batch_seed, distance=distance)
+    while True:
+        remaining = batch_size
+        if target_successes is not None:
+            remaining = min(batch_size, max(target_successes - successes, 1))
+        if target_attempts is not None:
+            remaining = min(batch_size, max(target_attempts - (successes + failures), 1))
+
+        tl = Timeline(stop_time=int(stop_time))  # 長すぎるイベント列を避けるためタイムアウトを設定
+        batch_seed = None if seed is None else seed + successes + failures
+        e0, e1, _ = build_line_network(tl, remaining, base_seed=batch_seed, distance=distance)
 
         path = [e0.name, e1.name]
-        install_eg_rules([e0, e1], path, batch_mem)
+        install_eg_rules([e0, e1], path, remaining)
 
         stats = {"succ": 0, "fail": 0}
         original_update = e0.resource_manager.update
@@ -256,6 +276,13 @@ def run_experiment(
                 stats["succ"] += 1
             elif state == "RAW" and protocol is not None:
                 stats["fail"] += 1
+            attempts_now = stats["succ"] + stats["fail"] + successes + failures
+
+            # attempt 定義: RM.update が成功/失敗で呼ばれるたびに 1 カウント（BK/DQT/EQT 共通）
+            if mode == "fixed_attempts" and target_attempts is not None and attempts_now >= target_attempts:
+                tl.stop()
+            if mode == "fixed_successes" and target_successes is not None and (stats["succ"] + successes) >= target_successes:
+                tl.stop()
             return original_update(protocol, memory, state)
 
         e0.resource_manager.update = counting_update  # type: ignore[method-assign]
@@ -265,7 +292,14 @@ def run_experiment(
 
         successes += stats["succ"]
         failures += stats["fail"]
-        processed += batch_mem
+
+        attempts = successes + failures
+        if mode == "fixed_attempts" and target_attempts is not None and attempts >= target_attempts:
+            break
+        if mode == "fixed_successes" and target_successes is not None and successes >= target_successes:
+            break
+        if mode == "fixed_time":
+            break
 
     # パッチした create を元に戻す（他コードへの副作用を避ける）
     if patched:
@@ -284,6 +318,8 @@ def run_experiment(
         "distance": distance,
         "eta_source": eta_source if protocol_type == EQT else None,
         "eta_dest": eta_dest if protocol_type == EQT else None,
+        "mode": mode,
+        "stop_time": stop_time,
     }
 
 
@@ -299,12 +335,13 @@ def _maybe_warn_unused_eta(strategy: str, eta_source: float, eta_dest: float) ->
 
 
 def _emit_markdown(results: list[dict]) -> None:
-    headers = ["strategy", "distance", "eta_source", "eta_dest", "trials", "successes", "attempts", "availability"]
+    headers = ["strategy", "mode", "distance", "eta_source", "eta_dest", "trials", "successes", "attempts", "availability"]
     print("| " + " | ".join(headers) + " |")
     print("|" + " --- |" * len(headers))
     for r in results:
         row = [
             r["strategy"],
+            r["mode"],
             f"{r['distance']:.0f}",
             f"{r.get('eta_source', 0.8):.2f}" if r.get("eta_source") is not None else "-",
             f"{r.get('eta_dest', 0.8):.2f}" if r.get("eta_dest") is not None else "-",
@@ -324,7 +361,7 @@ def _write_out(path: Path, results: list[dict]) -> None:
         with path.open("w", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["strategy", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
+                fieldnames=["strategy", "mode", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
             )
             writer.writeheader()
             for r in results:
@@ -346,6 +383,8 @@ def main():
             eta_dest=args.eta_dest,
             qt_eff=args.qt_eff,
             distance=dist,
+            mode=args.mode,
+            stop_time=args.stop_time,
         )
         results.append(result)
 
@@ -356,7 +395,7 @@ def main():
     elif args.format == "csv":
         writer = csv.DictWriter(
             sys.stdout,
-            fieldnames=["strategy", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
+            fieldnames=["strategy", "mode", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
         )
         writer.writeheader()
         for r in results:
