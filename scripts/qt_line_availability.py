@@ -11,8 +11,17 @@ BK / DQT / EQT を通常の ResourceManager / RuleManager / Network 経路で動
 from __future__ import annotations
 
 import argparse
+import csv
+import json
+import sys
 import numpy as np
+from pathlib import Path
 from typing import Sequence
+
+# Ensure repository root is importable when run as a script
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # 各戦略の定数をまとめて読み込む（EQT/DQT の registry 登録用 import もここで実行）
 from sequence.constants import BARRET_KOK, DQT, EQT
@@ -68,6 +77,30 @@ def parse_args() -> argparse.Namespace:
         default=0.7,
         help="DQT 用: トランスデューサ経路の成功確率（デフォルト 0.7）",
     )
+    parser.add_argument(
+        "--distance",
+        type=float,
+        default=1e4,
+        help="3ノード線形トポロジーで使うチャネル距離（メートル）。",
+    )
+    parser.add_argument(
+        "--distances",
+        type=str,
+        default=None,
+        help="カンマ区切りの距離リスト（指定時は distance を無視してスイープ）。",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="結果を書き出すファイルパス（拡張子 .csv または .json を推奨）。",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["md", "csv", "json"],
+        default="md",
+        help="標準出力に出す形式。md=Markdown テーブル。",
+    )
     return parser.parse_args()
 
 
@@ -88,7 +121,9 @@ def set_strategy(strategy: str) -> str:
     return protocol_type
 
 
-def build_line_network(tl: Timeline, num_memories: int, base_seed: int | None) -> tuple[QuantumRouter, QuantumRouter, BSMNode]:
+def build_line_network(
+    tl: Timeline, num_memories: int, base_seed: int | None, distance: float
+) -> tuple[QuantumRouter, QuantumRouter, BSMNode]:
     """3 ノード直線（e0-m0-e1）のネットワークを構築し、チャネルを張る。
 
     - 量子チャネルには現実的な減衰を設定してロスを入れる（可用性が 1.0 にならないようにする）
@@ -103,7 +138,6 @@ def build_line_network(tl: Timeline, num_memories: int, base_seed: int | None) -
     # 量子チャネル（左右から BSM へ）。遅延は適当な値を設定。
     # 減衰は 0.2 dB/km 相当（2e-4 dB/m）、距離 10 km とする
     attenuation = 2e-4
-    distance = 1e4
     qc_e0_m0 = QuantumChannel("qc_e0_m0", tl, attenuation, distance)
     qc_e1_m0 = QuantumChannel("qc_e1_m0", tl, attenuation, distance)
     qc_e0_m0.set_ends(e0, m0.name)
@@ -163,7 +197,15 @@ def _make_dqt_emitter(owner, memory, middle: str, success_prob: float):
     return DQEmitter()
 
 
-def run_experiment(strategy: str, num_trials: int, seed: int | None, eta_source: float, eta_dest: float, qt_eff: float) -> dict[str, float | int | str]:
+def run_experiment(
+    strategy: str,
+    num_trials: int,
+    seed: int | None,
+    eta_source: float,
+    eta_dest: float,
+    qt_eff: float,
+    distance: float,
+) -> dict[str, float | int | str | float]:
     """指定戦略でシミュレーションを走らせ、簡易可用性を返す。"""
     protocol_type = set_strategy(strategy)
 
@@ -201,7 +243,7 @@ def run_experiment(strategy: str, num_trials: int, seed: int | None, eta_source:
         batch_mem = min(batch_size, num_trials - processed)
         tl = Timeline(stop_time=int(5e12))  # 長すぎるイベント列を避けるためタイムアウトを設定
         batch_seed = None if seed is None else seed + processed
-        e0, e1, _ = build_line_network(tl, batch_mem, base_seed=batch_seed)
+        e0, e1, _ = build_line_network(tl, batch_mem, base_seed=batch_seed, distance=distance)
 
         path = [e0.name, e1.name]
         install_eg_rules([e0, e1], path, batch_mem)
@@ -239,27 +281,89 @@ def run_experiment(strategy: str, num_trials: int, seed: int | None, eta_source:
         "num_entangled": successes,
         "num_attempts": attempts,
         "availability": availability,
+        "distance": distance,
+        "eta_source": eta_source if protocol_type == EQT else None,
+        "eta_dest": eta_dest if protocol_type == EQT else None,
     }
+
+
+def _parse_distance_list(args: argparse.Namespace) -> list[float]:
+    if args.distances:
+        return [float(x) for x in args.distances.split(",") if x.strip()]
+    return [float(args.distance)]
+
+
+def _maybe_warn_unused_eta(strategy: str, eta_source: float, eta_dest: float) -> None:
+    if strategy != "EQT" and (eta_source != 0.8 or eta_dest != 0.8):
+        print("[info] eta-source/dest are ignored for non-EQT strategies.")
+
+
+def _emit_markdown(results: list[dict]) -> None:
+    headers = ["strategy", "distance", "eta_source", "eta_dest", "trials", "successes", "attempts", "availability"]
+    print("| " + " | ".join(headers) + " |")
+    print("|" + " --- |" * len(headers))
+    for r in results:
+        row = [
+            r["strategy"],
+            f"{r['distance']:.0f}",
+            f"{r.get('eta_source', 0.8):.2f}" if r.get("eta_source") is not None else "-",
+            f"{r.get('eta_dest', 0.8):.2f}" if r.get("eta_dest") is not None else "-",
+            str(r["num_trials"]),
+            str(r["num_entangled"]),
+            str(r["num_attempts"]),
+            f"{r['availability']:.3f}",
+        ]
+        print("| " + " | ".join(row) + " |")
+
+
+def _write_out(path: Path, results: list[dict]) -> None:
+    if path.suffix.lower() == ".json":
+        path.write_text(json.dumps(results, indent=2))
+    else:
+        # default to csv
+        with path.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["strategy", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
+            )
+            writer.writeheader()
+            for r in results:
+                writer.writerow(r)
 
 
 def main():
     args = parse_args()
-    result = run_experiment(
-        strategy=args.strategy,
-        num_trials=args.num_trials,
-        seed=args.seed,
-        eta_source=args.eta_source,
-        eta_dest=args.eta_dest,
-        qt_eff=args.qt_eff,
-    )
+    _maybe_warn_unused_eta(args.strategy, args.eta_source, args.eta_dest)
+    distances = _parse_distance_list(args)
 
-    # シンプルな可用性サマリを出力（EQT の eta_* は現状デフォルト 1.0）
-    print("strategy:", result["strategy"])
-    print("protocol_type:", result["protocol_type"])
-    print("num_trials:", result["num_trials"])
-    print("num_entangled:", result["num_entangled"])
-    print("num_attempts:", result["num_attempts"])
-    print(f"availability: {result['availability']:.3f}")
+    results = []
+    for dist in distances:
+        result = run_experiment(
+            strategy=args.strategy,
+            num_trials=args.num_trials,
+            seed=args.seed,
+            eta_source=args.eta_source,
+            eta_dest=args.eta_dest,
+            qt_eff=args.qt_eff,
+            distance=dist,
+        )
+        results.append(result)
+
+    if args.format == "md":
+        _emit_markdown(results)
+    elif args.format == "json":
+        print(json.dumps(results, indent=2))
+    elif args.format == "csv":
+        writer = csv.DictWriter(
+            sys.stdout,
+            fieldnames=["strategy", "distance", "eta_source", "eta_dest", "num_trials", "num_entangled", "num_attempts", "availability"],
+        )
+        writer.writeheader()
+        for r in results:
+            writer.writerow(r)
+
+    if args.out is not None:
+        _write_out(args.out, results)
 
 
 if __name__ == "__main__":
