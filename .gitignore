@@ -131,6 +131,9 @@ dmypy.json
 # csv files
 *.csv
 
+# local scratch logs
+memo*.txt
+
 # vscode-workspace
 sequence_gui_testing.code-workspace
 sequence/gui/.vscode
