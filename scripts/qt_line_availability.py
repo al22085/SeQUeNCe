@@ -27,6 +27,7 @@ from sequence.kernel.timeline import Timeline
 from sequence.resource_management.rule_manager import Rule
 from sequence.network_management.reservation import eg_rule_action1, eg_rule_action2, eg_rule_condition
 from sequence.topology.node import QuantumRouter, BSMNode
+from sequence.utils.availability import availability_from_counts
 
 
 def parse_args() -> argparse.Namespace:
@@ -229,7 +230,7 @@ def run_experiment(strategy: str, num_trials: int, seed: int | None, eta_source:
         EntanglementGenerationA.create = classmethod(orig_create)  # type: ignore[assignment]
 
     attempts = successes + failures
-    availability = successes / attempts if attempts > 0 else 0.0
+    availability = availability_from_counts(successes, attempts)
 
     return {
         "strategy": strategy,
