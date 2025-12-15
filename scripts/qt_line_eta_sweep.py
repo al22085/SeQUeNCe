@@ -42,6 +42,7 @@ def aggregate(values: Iterable[float]) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sweep EQT eta and compare to BK baseline.")
+    parser.add_argument("--protocols", type=str, default="EQT,DQT", help="Comma list of protocols to sweep (EQT,DQT).")
     parser.add_argument("--distance", type=float, default=1e3, help="Channel distance (m).")
     parser.add_argument("--etas", type=str, required=True, help="Comma list of eta values (0-1).")
     parser.add_argument("--seeds", type=str, required=True, help="Comma list of seeds.")
@@ -89,18 +90,40 @@ def write_agg(path: Path, rows: List[Dict]) -> None:
             writer.writerow(r)
 
 
+def _interp_crossover(x: List[float], y1: List[float], y2: List[float]) -> float | None:
+    for i in range(1, len(x)):
+        if (y1[i - 1] - y2[i - 1]) * (y1[i] - y2[i]) <= 0:
+            # linear interpolation
+            dx = x[i] - x[i - 1]
+            dy = (y1[i] - y2[i]) - (y1[i - 1] - y2[i - 1])
+            if dy == 0:
+                return x[i]
+            t = -(y1[i - 1] - y2[i - 1]) / dy
+            return x[i - 1] + t * dx
+    return None
+
+
 def plot_eta_curve(agg_rows: List[Dict], bk_mean: float, distance: float, attempts: int, seeds_count: int, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     eqt_rows = sorted([r for r in agg_rows if r["strategy"] == "EQT"], key=lambda r: r["eta"])
-
-    x = [r["eta"] for r in eqt_rows]
-    y = [r["availability_mean"] for r in eqt_rows]
-    ci = [r["availability_ci95"] for r in eqt_rows]
-    pred = [bk_mean * (eta ** 2) for eta in x]
+    dqt_rows = sorted([r for r in agg_rows if r["strategy"] == "DQT"], key=lambda r: r["eta"])
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.errorbar(x, y, yerr=ci, fmt="o-", label="EQT measured", capsize=4, color="tab:green", markersize=5)
-    ax.plot(x, pred, "o--", label="BK × eta^2 (theory)", color="tab:blue", markersize=4)
+
+    if eqt_rows:
+        x = [r["eta"] for r in eqt_rows]
+        y = [r["availability_mean"] for r in eqt_rows]
+        ci = [r["availability_ci95"] for r in eqt_rows]
+        pred = [bk_mean * (eta ** 2) for eta in x]
+        ax.errorbar(x, y, yerr=ci, fmt="o-", label="EQT measured", capsize=4, color="tab:green", markersize=5)
+        ax.plot(x, pred, "o--", label="BK × eta^2 (theory)", color="tab:blue", markersize=4)
+
+    if dqt_rows:
+        x2 = [r["eta"] for r in dqt_rows]
+        y2 = [r["availability_mean"] for r in dqt_rows]
+        ci2 = [r["availability_ci95"] for r in dqt_rows]
+        ax.errorbar(x2, y2, yerr=ci2, fmt="s-", label="DQT measured", capsize=4, color="tab:orange", markersize=5)
+
     ax.axhline(bk_mean, color="tab:gray", linestyle=":", label="BK mean")
 
     ax.set_xlabel("eta_source = eta_dest")
@@ -115,9 +138,15 @@ def plot_eta_curve(agg_rows: List[Dict], bk_mean: float, distance: float, attemp
         fig.savefig(out_path, dpi=200 if ext == "png" else None)
         print("Wrote", out_path)
 
+    if eqt_rows and dqt_rows and len(eqt_rows) == len(dqt_rows):
+        crossover = _interp_crossover(x, y, y2)
+        if crossover is not None:
+            print(f"DQT ~ EQT crossover eta≈{crossover:.3f}")
+
 
 def main() -> None:
     args = parse_args()
+    protocols = [p.strip() for p in args.protocols.split(",") if p.strip()]
     etas = _parse_floats(args.etas)
     seeds = _parse_ints(args.seeds)
     out_dir = args.out_dir
@@ -135,6 +164,8 @@ def main() -> None:
             eta_source=1.0,
             eta_dest=1.0,
             qt_eff=1.0,
+            dqt_eta_source=1.0,
+            dqt_eta_dest=1.0,
             distance=args.distance,
             mode="fixed_attempts",
             stop_time=args.stop_time,
@@ -154,30 +185,62 @@ def main() -> None:
     bk_stats = aggregate(bk_avails)
 
     # EQT sweep
-    for eta in etas:
-        for seed in seeds:
-            res = run_experiment(
-                strategy="EQT",
-                num_trials=args.attempts,
-                seed=seed,
-                eta_source=eta,
-                eta_dest=eta,
-                qt_eff=1.0,
-                distance=args.distance,
-                mode="fixed_attempts",
-                stop_time=args.stop_time,
-            )
-            raw_rows.append(
-                {
-                    "strategy": "EQT",
-                    "distance": args.distance,
-                    "eta": eta,
-                    "seed": seed,
-                    "num_attempts": args.attempts,
-                    "num_entangled": res["num_entangled"],
-                    "availability": res["availability"],
-                }
-            )
+    if "EQT" in protocols:
+        for eta in etas:
+            for seed in seeds:
+                res = run_experiment(
+                    strategy="EQT",
+                    num_trials=args.attempts,
+                    seed=seed,
+                    eta_source=eta,
+                    eta_dest=eta,
+                    qt_eff=1.0,
+                    dqt_eta_source=1.0,
+                    dqt_eta_dest=1.0,
+                    distance=args.distance,
+                    mode="fixed_attempts",
+                    stop_time=args.stop_time,
+                )
+                raw_rows.append(
+                    {
+                        "strategy": "EQT",
+                        "distance": args.distance,
+                        "eta": eta,
+                        "seed": seed,
+                        "num_attempts": args.attempts,
+                        "num_entangled": res["num_entangled"],
+                        "availability": res["availability"],
+                    }
+                )
+
+    # DQT sweep
+    if "DQT" in protocols:
+        for eta in etas:
+            for seed in seeds:
+                res = run_experiment(
+                    strategy="DQT",
+                    num_trials=args.attempts,
+                    seed=seed,
+                    eta_source=1.0,
+                    eta_dest=1.0,
+                    qt_eff=None,
+                    dqt_eta_source=eta,
+                    dqt_eta_dest=eta,
+                    distance=args.distance,
+                    mode="fixed_attempts",
+                    stop_time=args.stop_time,
+                )
+                raw_rows.append(
+                    {
+                        "strategy": "DQT",
+                        "distance": args.distance,
+                        "eta": eta,
+                        "seed": seed,
+                        "num_attempts": args.attempts,
+                        "num_entangled": res["num_entangled"],
+                        "availability": res["availability"],
+                    }
+                )
 
     raw_path = out_dir / "qt_eta_raw.csv"
     write_raw(raw_path, raw_rows)
@@ -198,21 +261,38 @@ def main() -> None:
     )
 
     for eta in etas:
-        vals = [r["availability"] for r in raw_rows if r["strategy"] == "EQT" and r["eta"] == eta]
-        stats = aggregate(vals)
-        agg_rows.append(
-            {
-                "strategy": "EQT",
-                "distance": args.distance,
-                "attempts_target": args.attempts,
-                "eta": eta,
-                "n_seeds": stats["n"],
-                "availability_mean": stats["mean"],
-                "availability_std": stats["std"],
-                "availability_ci95": stats["ci95"],
-                "predicted_from_bk": bk_stats["mean"] * (eta ** 2),
-            }
-        )
+        if "EQT" in protocols:
+            vals = [r["availability"] for r in raw_rows if r["strategy"] == "EQT" and r["eta"] == eta]
+            stats = aggregate(vals)
+            agg_rows.append(
+                {
+                    "strategy": "EQT",
+                    "distance": args.distance,
+                    "attempts_target": args.attempts,
+                    "eta": eta,
+                    "n_seeds": stats["n"],
+                    "availability_mean": stats["mean"],
+                    "availability_std": stats["std"],
+                    "availability_ci95": stats["ci95"],
+                    "predicted_from_bk": bk_stats["mean"] * (eta ** 2),
+                }
+            )
+        if "DQT" in protocols:
+            vals = [r["availability"] for r in raw_rows if r["strategy"] == "DQT" and r["eta"] == eta]
+            stats = aggregate(vals)
+            agg_rows.append(
+                {
+                    "strategy": "DQT",
+                    "distance": args.distance,
+                    "attempts_target": args.attempts,
+                    "eta": eta,
+                    "n_seeds": stats["n"],
+                    "availability_mean": stats["mean"],
+                    "availability_std": stats["std"],
+                    "availability_ci95": stats["ci95"],
+                    "predicted_from_bk": None,
+                }
+            )
 
     agg_path = out_dir / "qt_eta_agg.csv"
     write_agg(agg_path, agg_rows)
@@ -221,9 +301,14 @@ def main() -> None:
 
     # summary
     print("BK mean availability:", f"{bk_stats['mean']:.3f} ± {bk_stats['std']:.3f} (n={bk_stats['n']})")
-    for eta in etas[:5]:
-        stats = [r for r in agg_rows if r["strategy"] == "EQT" and r["eta"] == eta][0]
-        print(f"eta={eta:.2f} -> EQT {stats['availability_mean']:.3f}±{stats['availability_std']:.3f}, predicted {stats['predicted_from_bk']:.3f}")
+    if "EQT" in protocols:
+        for eta in etas[:5]:
+            stats = [r for r in agg_rows if r["strategy"] == "EQT" and r["eta"] == eta][0]
+            print(f"eta={eta:.2f} -> EQT {stats['availability_mean']:.3f}±{stats['availability_std']:.3f}, predicted {stats['predicted_from_bk']:.3f}")
+    if "DQT" in protocols:
+        for eta in etas[:5]:
+            stats = [r for r in agg_rows if r["strategy"] == "DQT" and r["eta"] == eta][0]
+            print(f"eta={eta:.2f} -> DQT {stats['availability_mean']:.3f}±{stats['availability_std']:.3f}")
 
 
 if __name__ == "__main__":
