@@ -32,10 +32,13 @@ from sequence.app.request_app import RequestApp
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Request-level availability using SeQUeNCe on A-R1-R2-B line.")
     p.add_argument("--strategy", choices=["BK", "DQT", "EQT"], default="BK")
-    p.add_argument("--arch", choices=["optical", "hybrid"], default="optical")
-    p.add_argument("--distance", type=float, default=1e3, help="Per-link distance (m).")
-    p.add_argument("--deadline-ps", type=float, default=5e9, help="Deadline in picoseconds (timeline unit).")
-    p.add_argument("--deadline-s", type=float, default=None, help="Optional deadline in seconds (overrides ps).")
+    p.add_argument("--arch", choices=["optical", "hybrid", "custom"], default="optical")
+    p.add_argument("--distance", type=float, default=1e3, help="Per-link distance (m). Total path length = 3*distance.")
+    p.add_argument("--deadline-mode", choices=["absolute", "scaled"], default="scaled", help="absolute: use provided ps/s; scaled: compute from distance*fiber_v*deadline_factor.")
+    p.add_argument("--deadline-ps", type=float, default=None, help="Deadline in picoseconds (timeline unit). Used if deadline-mode=absolute or provided explicitly.")
+    p.add_argument("--deadline-s", type=float, default=None, help="Optional deadline in seconds (overrides ps) when deadline-mode=absolute.")
+    p.add_argument("--deadline-factor", type=float, default=20.0, help="Scaled deadline multiplier: deadline_s = factor * (total_distance / fiber_v).")
+    p.add_argument("--fiber-v", type=float, default=2e8, help="Fiber group velocity (m/s) for deadline scaling.")
     p.add_argument("--num-trials", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eta-source", type=float, default=0.8)
@@ -227,7 +230,17 @@ def run_trial(trial_idx: int, args: argparse.Namespace, pt: str, deadline_ps: in
 
 def run_trials(args: argparse.Namespace) -> Dict[str, any]:
     pt = set_strategy(args.strategy)
-    deadline_ps = int(args.deadline_ps if args.deadline_s is None else args.deadline_s * 1e12)
+    if args.deadline_mode == "scaled":
+        total_distance = 3 * args.distance
+        deadline_s = args.deadline_factor * (total_distance / args.fiber_v)
+    else:
+        if args.deadline_s is not None:
+            deadline_s = args.deadline_s
+        elif args.deadline_ps is not None:
+            deadline_s = args.deadline_ps / 1e12
+        else:
+            deadline_s = 0.0
+    deadline_ps = int(deadline_s * 1e12)
     successes = 0
     times: List[int] = []
     for i in range(args.num_trials):
@@ -243,6 +256,9 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
         "distance_per_link": args.distance,
         "deadline_ps": deadline_ps,
         "deadline_s": deadline_ps / 1e12,
+        "deadline_mode": args.deadline_mode,
+        "deadline_factor": args.deadline_factor,
+        "fiber_v": args.fiber_v,
         "num_trials": args.num_trials,
         "satisfied": successes,
         "availability_req": availability,
@@ -255,6 +271,9 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
             "qt_eff": args.qt_eff,
             "swap_success": args.swap_success,
             "mem_coh_s": args.mem_coh_s,
+            "deadline_mode": args.deadline_mode,
+            "deadline_factor": args.deadline_factor,
+            "fiber_v": args.fiber_v,
         },
     }
 
