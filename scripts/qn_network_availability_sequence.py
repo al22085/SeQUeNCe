@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from types import SimpleNamespace
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -23,10 +24,16 @@ from sequence.entanglement_management.generation import EntanglementGenerationA,
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel
 from sequence.kernel.timeline import Timeline
 from sequence.network_management.network_manager import StaticRoutingProtocol
-from sequence.network_management.reservation import eg_rule_action1, eg_rule_action2, eg_rule_condition
-from sequence.resource_management.rule_manager import Rule
 from sequence.topology.node import QuantumRouter, BSMNode
 from sequence.app.request_app import RequestApp
+
+
+def sec_to_ps(s: float) -> int:
+    return int(round(s * 1e12))
+
+
+def ps_to_sec(ps: int) -> float:
+    return ps / 1e12
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,11 +41,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--strategy", choices=["BK", "DQT", "EQT"], default="BK")
     p.add_argument("--arch", choices=["optical", "hybrid", "custom"], default="optical")
     p.add_argument("--distance", type=float, default=1e3, help="Per-link distance (m). Total path length = 3*distance.")
-    p.add_argument("--deadline-mode", choices=["absolute", "scaled"], default="scaled", help="absolute: use provided ps/s; scaled: compute from distance*fiber_v*deadline_factor.")
+    p.add_argument("--deadline-mode", choices=["absolute", "scaled"], default="absolute", help="absolute: use deadline-s/ps; scaled: deadline_s = factor * (path_distance / fiber_v). Timeline unit is ps.")
     p.add_argument("--deadline-ps", type=float, default=None, help="Deadline in picoseconds (timeline unit). Used if deadline-mode=absolute or provided explicitly.")
-    p.add_argument("--deadline-s", type=float, default=None, help="Optional deadline in seconds (overrides ps) when deadline-mode=absolute.")
+    p.add_argument("--deadline-s", type=float, default=0.1, help="Optional deadline in seconds (overrides ps) when deadline-mode=absolute.")
     p.add_argument("--deadline-factor", type=float, default=20.0, help="Scaled deadline multiplier: deadline_s = factor * (total_distance / fiber_v).")
     p.add_argument("--fiber-v", type=float, default=2e8, help="Fiber group velocity (m/s) for deadline scaling.")
+    p.add_argument("--setup-factor", type=float, default=5000.0, help="Multiplier for reservation setup slack (slack = factor * path_distance/fiber_v).")
+    p.add_argument("--min-start-delay-s", type=float, default=0.01, help="Minimum start slack in seconds to ensure RSVP setup before start_time.")
     p.add_argument("--num-trials", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eta-source", type=float, default=0.8)
@@ -48,6 +57,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--qt-eff", type=float, default=None, help="Legacy DQT success prob (overrides dqt etas).")
     p.add_argument("--swap-success", type=float, default=1.0, help="Swapping success probability.")
     p.add_argument("--mem-coh-s", type=float, default=None, help="Memory coherence time (s) for all nodes.")
+    p.add_argument("--attn", type=float, default=2e-4, help="Fiber attenuation coefficient for quantum channels.")
+    p.add_argument("--cc-delay", type=float, default=1e9, help="Classical channel delay (ps).")
+    p.add_argument("--sanity", choices=["off", "ideal"], default="off", help="ideal forces near-deterministic params (short links, eta=1, low delays).")
     p.add_argument("--format", choices=["md", "json", "csv"], default="md")
     p.add_argument("--out", type=Path, default=None)
     return p.parse_args()
@@ -67,57 +79,6 @@ def set_strategy(proto: str) -> str:
     return pt
 
 
-def install_pair(tl: Timeline, n1: QuantumRouter, n2: QuantumRouter, bsm: BSMNode, link_name: str, dqt_emitter_prob: float | None, eta_source: float, eta_dest: float):
-    # add BSM mapping and channels
-    n1.add_bsm_node(bsm.name, n2.name)
-    n2.add_bsm_node(bsm.name, n1.name)
-    dist = tl.params.get("distance_override", 0)
-    qc1 = QuantumChannel(f"qc_{link_name}_1", tl, attenuation=2e-4, distance=dist)
-    qc2 = QuantumChannel(f"qc_{link_name}_2", tl, attenuation=2e-4, distance=dist)
-    qc1.set_ends(n1, bsm.name)
-    qc2.set_ends(n2, bsm.name)
-    for src in (n1, n2, bsm):
-        for dst in (n1, n2, bsm):
-            if src.name == dst.name:
-                continue
-            cc = ClassicalChannel(f"cc_{link_name}_{src.name}_{dst.name}", tl, 1e3, delay=1e9)
-            cc.set_ends(src, dst.name)
-
-    def make_rule(router: QuantumRouter, index: int, path: List[str]):
-        mem_array = router.components[router.memo_arr_name]
-        memory_indices = list(range(len(mem_array.memories)))
-        if index > 0:
-            condition_args = {"memory_indices": memory_indices}
-            action_args = {"mid": router.map_to_middle_node[path[index - 1]], "path": path, "index": index}
-            rule = Rule(10, eg_rule_action1, eg_rule_condition, action_args, condition_args)
-        else:
-            condition_args = {"memory_indices": memory_indices}
-            action_args = {"mid": router.map_to_middle_node[path[index + 1]], "path": path, "index": index, "name": router.name, "reservation": None}
-            rule = Rule(10, eg_rule_action2, eg_rule_condition, action_args, condition_args)
-        return rule
-
-    path = [n1.name, n2.name]
-    r1 = make_rule(n1, 0, path)
-    r2 = make_rule(n2, 1, path)
-    n1.resource_manager.load(r1)
-    n2.resource_manager.load(r2)
-
-    orig_create = EntanglementGenerationA.create.__func__
-    if EntanglementGenerationA.get_global_type() == EQT:
-        def eqt_create(cls, owner, name, middle, other, memory, **kwargs):
-            kwargs.setdefault("eta_source", eta_source)
-            kwargs.setdefault("eta_dest", eta_dest)
-            return orig_create(cls, owner, name, middle, other, memory, **kwargs)
-        EntanglementGenerationA.create = classmethod(eqt_create)  # type: ignore
-    elif EntanglementGenerationA.get_global_type() == DQT:
-        prob = dqt_emitter_prob if dqt_emitter_prob is not None else dqt_eta_source * dqt_eta_dest
-
-        def dqt_create(cls, owner, name, middle, other, memory, **kwargs):
-            kwargs.setdefault("qt_emitter", _make_dqt_emitter(owner, memory, middle, prob))
-            return orig_create(cls, owner, name, middle, other, memory, **kwargs)
-        EntanglementGenerationA.create = classmethod(dqt_create)  # type: ignore
-
-
 def _make_dqt_emitter(owner, memory, middle: str, success_prob: float):
     class DQEmitter:
         def start(self):
@@ -130,9 +91,57 @@ def _make_dqt_emitter(owner, memory, middle: str, success_prob: float):
     return DQEmitter()
 
 
-def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_source: float, eta_dest: float, dqt_eta_source: float, dqt_eta_dest: float, mem_coh_s: float | None, swap_success: float):
-    # attach distance override to timeline for channel setup
-    tl.params["distance_override"] = distance
+def patch_generation(pt: str, eta_source: float, eta_dest: float, dqt_prob: Optional[float]):
+    orig_create = EntanglementGenerationA.create.__func__
+    if pt == EQT:
+        def eqt_create(cls, owner, name, middle, other, memory, **kwargs):
+            kwargs.setdefault("eta_source", eta_source)
+            kwargs.setdefault("eta_dest", eta_dest)
+            return orig_create(cls, owner, name, middle, other, memory, **kwargs)
+        EntanglementGenerationA.create = classmethod(eqt_create)  # type: ignore
+    elif pt == DQT:
+        prob = dqt_prob if dqt_prob is not None else eta_source * eta_dest
+
+        def dqt_create(cls, owner, name, middle, other, memory, **kwargs):
+            kwargs.setdefault("qt_emitter", _make_dqt_emitter(owner, memory, middle, prob))
+            return orig_create(cls, owner, name, middle, other, memory, **kwargs)
+        EntanglementGenerationA.create = classmethod(dqt_create)  # type: ignore
+    return orig_create
+
+
+def restore_generation(orig_create):
+    EntanglementGenerationA.create = classmethod(orig_create)
+
+
+def install_pair(
+    tl: Timeline,
+    n1: QuantumRouter,
+    n2: QuantumRouter,
+    bsm: BSMNode,
+    link_name: str,
+    attn: float,
+    distance: float,
+    cc_delay: float,
+):
+    n1.add_bsm_node(bsm.name, n2.name)
+    n2.add_bsm_node(bsm.name, n1.name)
+    QuantumChannel(f"qc_{link_name}_1", tl, attenuation=attn, distance=distance).set_ends(n1, bsm.name)
+    QuantumChannel(f"qc_{link_name}_2", tl, attenuation=attn, distance=distance).set_ends(n2, bsm.name)
+    for src in (n1, n2, bsm):
+        for dst in (n1, n2, bsm):
+            if src.name == dst.name:
+                continue
+            ClassicalChannel(f"cc_{link_name}_{src.name}_{dst.name}", tl, 1e3, delay=cc_delay).set_ends(src, dst.name)
+
+
+def build_network(
+    tl: Timeline,
+    distance: float,
+    mem_coh_s: Optional[float],
+    swap_success: float,
+    attn: float,
+    cc_delay: float,
+) -> tuple[QuantumRouter, QuantumRouter, QuantumRouter, QuantumRouter]:
     mem_templates = {}
     if mem_coh_s is not None:
         mem_templates = {"MemoryArray": {"coherence_time": mem_coh_s}}
@@ -144,11 +153,10 @@ def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_sou
     bsm12 = BSMNode("bsm12", tl, [R1.name, R2.name])
     bsm23 = BSMNode("bsm23", tl, [R2.name, B.name])
 
-    install_pair(tl, A, R1, bsm01, "A_R1", dqt_prob, eta_source, eta_dest)
-    install_pair(tl, R1, R2, bsm12, "R1_R2", dqt_prob, eta_source, eta_dest)
-    install_pair(tl, R2, B, bsm23, "R2_B", dqt_prob, eta_source, eta_dest)
+    install_pair(tl, A, R1, bsm01, "A_R1", attn, distance, cc_delay)
+    install_pair(tl, R1, R2, bsm12, "R1_R2", attn, distance, cc_delay)
+    install_pair(tl, R2, B, bsm23, "R2_B", attn, distance, cc_delay)
 
-    # Set static routing tables
     def set_route(router: QuantumRouter, table: dict):
         proto = router.network_manager.protocol_stack[0]
         assert isinstance(proto, StaticRoutingProtocol)
@@ -160,7 +168,6 @@ def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_sou
     set_route(R2, {"A": R1.name, "B": B.name})
     set_route(B, {"A": R2.name})
 
-    # Increase swapping success if requested
     for n in (A, R1, R2, B):
         rsvp = n.network_manager.protocol_stack[1]
         rsvp.set_swapping_success_rate(swap_success)
@@ -168,59 +175,69 @@ def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_sou
     return A, R1, R2, B
 
 
-def run_trial(trial_idx: int, args: argparse.Namespace, pt: str, deadline_ps: int) -> Dict[str, float | bool]:
-    tl = Timeline(stop_time=deadline_ps)
-    tl.params = {}
-    seed = None if args.seed is None else args.seed + trial_idx
-    if seed is not None:
-        np.random.seed(seed)
-    dqt_prob = args.qt_eff if args.qt_eff is not None else args.dqt_eta_source * args.dqt_eta_dest
-    A, R1, R2, B = build_network(
-        tl,
-        args.distance,
-        dqt_prob if pt == DQT else None,
-        args.eta_source,
-        args.eta_dest,
-        args.dqt_eta_source,
-        args.dqt_eta_dest,
-        args.mem_coh_s,
-        args.swap_success,
-    )
+def _wrap_get_memory(app: RequestApp, tl: Timeline, remote_name: str, success_time: dict):
+    orig_get_memory = app.get_memory
 
-    satisfied = {"done": False, "time": None}
-
-    appA = RequestApp(A)
-    appB = RequestApp(B)
-
-    success_time = {"t": None}
-
-    orig_get_memory = appB.get_memory
-
-    def get_memory_wrapper(info):
+    def wrapper(info):
         orig_get_memory(info)
-        if info.state == "ENTANGLED" and info.remote_node == A.name and info.fidelity >= 0:
-            if appB.memory_counter > 0 and success_time["t"] is None:
+        if info.state == "ENTANGLED" and info.remote_node == remote_name:
+            if success_time["t"] is None:
                 success_time["t"] = tl.now()
                 tl.stop()
 
-    appB.get_memory = get_memory_wrapper  # type: ignore
+    return wrapper
 
-    original_updates = {}
-    for router in (A, R1, R2, B):
-        rm = router.resource_manager
-        original_updates[rm] = rm.update
 
-        def make_update(orig):
-            def update(protocol, memory, state):
-                res = orig(protocol, memory, state)
-                if state == "ENTANGLED":
-                    check_success()
-                return res
-            return update
+def compute_window(args: SimpleNamespace, total_distance: float) -> tuple[int, int, float]:
+    if args.deadline_mode == "absolute":
+        if args.deadline_s is not None:
+            deadline_s = args.deadline_s
+        elif args.deadline_ps is not None:
+            deadline_s = ps_to_sec(int(args.deadline_ps))
+        else:
+            deadline_s = 0.1
+    else:
+        deadline_s = args.deadline_factor * (total_distance / args.fiber_v)
+    t_prop_s = total_distance / args.fiber_v
+    setup_slack_s = max(args.min_start_delay_s, args.setup_factor * t_prop_s)
+    start_time_ps = sec_to_ps(setup_slack_s)
+    end_time_ps = sec_to_ps(deadline_s)
+    if not isinstance(start_time_ps, int) or not isinstance(end_time_ps, int):
+        raise ValueError("Reservation times must be int picoseconds.")
+    if not (start_time_ps > 0 and end_time_ps > start_time_ps):
+        raise ValueError(f"Invalid reservation window: now=0 start={start_time_ps} end={end_time_ps} slack_s={setup_slack_s} deadline_s={deadline_s}")
+    return start_time_ps, end_time_ps, setup_slack_s
 
-        rm.update = make_update(original_updates[rm])  # type: ignore
 
-    appA.start(B.name, start_t=0, end_t=deadline_ps, memo_size=1, fidelity=0.9)
+def run_trial(
+    trial_idx: int,
+    args: SimpleNamespace,
+    pt: str,
+    start_time_ps: int,
+    end_time_ps: int,
+) -> Dict[str, float | bool | int | None]:
+    tl = Timeline(stop_time=end_time_ps)
+    seed = None if args.seed is None else args.seed + trial_idx
+    if seed is not None:
+        np.random.seed(seed)
+
+    A, R1, R2, B = build_network(
+        tl,
+        args.distance,
+        args.mem_coh_s,
+        args.swap_success,
+        args.attn,
+        args.cc_delay,
+    )
+
+    appA = RequestApp(A)
+    appB = RequestApp(B)
+    success_time = {"t": None}
+
+    appA.get_memory = _wrap_get_memory(appA, tl, B.name, success_time)  # type: ignore
+    appB.get_memory = _wrap_get_memory(appB, tl, A.name, success_time)  # type: ignore
+
+    appA.start(B.name, start_t=start_time_ps, end_t=end_time_ps, memo_size=1, fidelity=0.9)
 
     tl.init()
     tl.run()
@@ -229,69 +246,99 @@ def run_trial(trial_idx: int, args: argparse.Namespace, pt: str, deadline_ps: in
 
 
 def run_trials(args: argparse.Namespace) -> Dict[str, any]:
-    pt = set_strategy(args.strategy)
-    if args.deadline_mode == "scaled":
-        total_distance = 3 * args.distance
-        deadline_s = args.deadline_factor * (total_distance / args.fiber_v)
-    else:
-        if args.deadline_s is not None:
-            deadline_s = args.deadline_s
-        elif args.deadline_ps is not None:
-            deadline_s = args.deadline_ps / 1e12
-        else:
-            deadline_s = 0.0
-    deadline_ps = int(deadline_s * 1e12)
+    resolved = SimpleNamespace(**vars(args))
+    if resolved.sanity == "ideal":
+        resolved.distance = 1.0
+        resolved.attn = 0.0
+        resolved.cc_delay = 1e6
+        resolved.eta_source = 1.0
+        resolved.eta_dest = 1.0
+        resolved.dqt_eta_source = 1.0
+        resolved.dqt_eta_dest = 1.0
+        resolved.swap_success = 1.0
+        resolved.mem_coh_s = 1.0
+        resolved.qt_eff = None
+    pt = set_strategy(resolved.strategy)
+    dqt_prob = resolved.qt_eff if resolved.qt_eff is not None else resolved.dqt_eta_source * resolved.dqt_eta_dest
+    orig_create = patch_generation(pt, resolved.eta_source, resolved.eta_dest, dqt_prob if pt == DQT else None)
+    total_distance = 3 * resolved.distance
+    start_time_ps, end_time_ps, setup_slack_s = compute_window(resolved, total_distance)
+    deadline_ps = end_time_ps
     successes = 0
     times: List[int] = []
-    for i in range(args.num_trials):
-        res = run_trial(i, args, pt, deadline_ps)
-        if res["success"]:
-            successes += 1
-            times.append(res["t_success"])
-    availability = successes / args.num_trials if args.num_trials > 0 else 0.0
+    try:
+        for i in range(resolved.num_trials):
+            res = run_trial(i, resolved, pt, start_time_ps, end_time_ps)
+            if res["success"]:
+                successes += 1
+                times.append(res["t_success"])  # type: ignore
+    finally:
+        restore_generation(orig_create)
+
+    availability = successes / resolved.num_trials if resolved.num_trials > 0 else 0.0
     mean_t = float(np.mean(times)) if times else None
-    return {
-        "arch": args.arch,
-        "strategy": args.strategy,
-        "distance_per_link": args.distance,
+    result = {
+        "arch": resolved.arch,
+        "strategy": resolved.strategy,
+        "distance_per_link": resolved.distance,
+        "total_distance": total_distance,
         "deadline_ps": deadline_ps,
-        "deadline_s": deadline_ps / 1e12,
-        "deadline_mode": args.deadline_mode,
-        "deadline_factor": args.deadline_factor,
-        "fiber_v": args.fiber_v,
-        "num_trials": args.num_trials,
+        "deadline_s": ps_to_sec(deadline_ps),
+        "deadline_mode": resolved.deadline_mode,
+        "deadline_factor": resolved.deadline_factor,
+        "fiber_v": resolved.fiber_v,
+        "setup_slack_s": setup_slack_s,
+        "start_time_ps": start_time_ps,
+        "start_time_s": ps_to_sec(start_time_ps),
+        "num_trials": resolved.num_trials,
         "satisfied": successes,
         "availability_req": availability,
         "mean_t_success": mean_t,
         "params": {
-            "eta_source": args.eta_source,
-            "eta_dest": args.eta_dest,
-            "dqt_eta_source": args.dqt_eta_source,
-            "dqt_eta_dest": args.dqt_eta_dest,
-            "qt_eff": args.qt_eff,
-            "swap_success": args.swap_success,
-            "mem_coh_s": args.mem_coh_s,
-            "deadline_mode": args.deadline_mode,
-            "deadline_factor": args.deadline_factor,
-            "fiber_v": args.fiber_v,
+            "eta_source": resolved.eta_source,
+            "eta_dest": resolved.eta_dest,
+            "dqt_eta_source": resolved.dqt_eta_source,
+            "dqt_eta_dest": resolved.dqt_eta_dest,
+            "qt_eff": resolved.qt_eff,
+            "swap_success": resolved.swap_success,
+            "mem_coh_s": resolved.mem_coh_s,
+            "attn": resolved.attn,
+            "cc_delay": resolved.cc_delay,
+            "sanity": resolved.sanity,
         },
     }
+    return result
 
 
 def emit(result: Dict[str, any], fmt: str) -> str:
     if fmt == "json":
         return json.dumps(result, indent=2)
+    headers = [
+        "arch",
+        "strategy",
+        "distance_per_link",
+        "deadline_ps",
+        "deadline_s",
+        "setup_slack_s",
+        "start_time_ps",
+        "start_time_s",
+        "num_trials",
+        "satisfied",
+        "availability_req",
+        "mean_t_success",
+    ]
     if fmt == "csv":
-        headers = ["arch", "strategy", "distance_per_link", "deadline_ps", "deadline_s", "num_trials", "satisfied", "availability_req", "mean_t_success"]
         values = [str(result.get(h, "")) for h in headers]
         return ",".join(headers) + "\n" + ",".join(values)
-    headers = ["arch", "strategy", "distance_per_link", "deadline_ps", "deadline_s", "num_trials", "satisfied", "availability_req", "mean_t_success"]
     row = [
         result.get("arch"),
         result.get("strategy"),
         f"{result.get('distance_per_link')}",
         f"{result.get('deadline_ps')}",
         f"{result.get('deadline_s'):.6f}",
+        f"{result.get('setup_slack_s'):.6f}",
+        f"{result.get('start_time_ps')}",
+        f"{result.get('start_time_s'):.6f}",
         str(result.get("num_trials")),
         str(result.get("satisfied")),
         f"{result.get('availability_req'):.3f}",
