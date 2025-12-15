@@ -22,9 +22,11 @@ import sequence.entanglement_management.generation.qt_eqt  # noqa: F401
 from sequence.entanglement_management.generation import EntanglementGenerationA, EntanglementGenerationB
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel
 from sequence.kernel.timeline import Timeline
+from sequence.network_management.network_manager import StaticRoutingProtocol
 from sequence.network_management.reservation import eg_rule_action1, eg_rule_action2, eg_rule_condition
 from sequence.resource_management.rule_manager import Rule
 from sequence.topology.node import QuantumRouter, BSMNode
+from sequence.app.request_app import RequestApp
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +34,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--strategy", choices=["BK", "DQT", "EQT"], default="BK")
     p.add_argument("--arch", choices=["optical", "hybrid"], default="optical")
     p.add_argument("--distance", type=float, default=1e3, help="Per-link distance (m).")
-    p.add_argument("--deadline", type=float, default=2e4, help="Timeline stop_time/deadline (ps).")
+    p.add_argument("--deadline-ps", type=float, default=5e9, help="Deadline in picoseconds (timeline unit).")
+    p.add_argument("--deadline-s", type=float, default=None, help="Optional deadline in seconds (overrides ps).")
     p.add_argument("--num-trials", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eta-source", type=float, default=0.8)
@@ -40,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dqt-eta-source", type=float, default=1.0)
     p.add_argument("--dqt-eta-dest", type=float, default=0.7)
     p.add_argument("--qt-eff", type=float, default=None, help="Legacy DQT success prob (overrides dqt etas).")
+    p.add_argument("--swap-success", type=float, default=1.0, help="Swapping success probability.")
+    p.add_argument("--mem-coh-s", type=float, default=None, help="Memory coherence time (s) for all nodes.")
     p.add_argument("--format", choices=["md", "json", "csv"], default="md")
     p.add_argument("--out", type=Path, default=None)
     return p.parse_args()
@@ -63,8 +68,9 @@ def install_pair(tl: Timeline, n1: QuantumRouter, n2: QuantumRouter, bsm: BSMNod
     # add BSM mapping and channels
     n1.add_bsm_node(bsm.name, n2.name)
     n2.add_bsm_node(bsm.name, n1.name)
-    qc1 = QuantumChannel(f"qc_{link_name}_1", tl, attenuation=2e-4, distance=tl.params.get("distance_override", None) or 0)
-    qc2 = QuantumChannel(f"qc_{link_name}_2", tl, attenuation=2e-4, distance=tl.params.get("distance_override", None) or 0)
+    dist = tl.params.get("distance_override", 0)
+    qc1 = QuantumChannel(f"qc_{link_name}_1", tl, attenuation=2e-4, distance=dist)
+    qc2 = QuantumChannel(f"qc_{link_name}_2", tl, attenuation=2e-4, distance=dist)
     qc1.set_ends(n1, bsm.name)
     qc2.set_ends(n2, bsm.name)
     for src in (n1, n2, bsm):
@@ -121,13 +127,16 @@ def _make_dqt_emitter(owner, memory, middle: str, success_prob: float):
     return DQEmitter()
 
 
-def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_source: float, eta_dest: float, dqt_eta_source: float, dqt_eta_dest: float):
+def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_source: float, eta_dest: float, dqt_eta_source: float, dqt_eta_dest: float, mem_coh_s: float | None, swap_success: float):
     # attach distance override to timeline for channel setup
     tl.params["distance_override"] = distance
-    A = QuantumRouter("A", tl, memo_size=2)
-    R1 = QuantumRouter("R1", tl, memo_size=2)
-    R2 = QuantumRouter("R2", tl, memo_size=2)
-    B = QuantumRouter("B", tl, memo_size=2)
+    mem_templates = {}
+    if mem_coh_s is not None:
+        mem_templates = {"MemoryArray": {"coherence_time": mem_coh_s}}
+    A = QuantumRouter("A", tl, memo_size=2, component_templates=mem_templates)
+    R1 = QuantumRouter("R1", tl, memo_size=2, component_templates=mem_templates)
+    R2 = QuantumRouter("R2", tl, memo_size=2, component_templates=mem_templates)
+    B = QuantumRouter("B", tl, memo_size=2, component_templates=mem_templates)
     bsm01 = BSMNode("bsm01", tl, [A.name, R1.name])
     bsm12 = BSMNode("bsm12", tl, [R1.name, R2.name])
     bsm23 = BSMNode("bsm23", tl, [R2.name, B.name])
@@ -136,34 +145,62 @@ def build_network(tl: Timeline, distance: float, dqt_prob: float | None, eta_sou
     install_pair(tl, R1, R2, bsm12, "R1_R2", dqt_prob, eta_source, eta_dest)
     install_pair(tl, R2, B, bsm23, "R2_B", dqt_prob, eta_source, eta_dest)
 
+    # Set static routing tables
+    def set_route(router: QuantumRouter, table: dict):
+        proto = router.network_manager.protocol_stack[0]
+        assert isinstance(proto, StaticRoutingProtocol)
+        for dst, hop in table.items():
+            proto.update_forwarding_rule(dst, hop)
+
+    set_route(A, {"B": R1.name})
+    set_route(R1, {"A": A.name, "B": R2.name})
+    set_route(R2, {"A": R1.name, "B": B.name})
+    set_route(B, {"A": R2.name})
+
+    # Increase swapping success if requested
+    for n in (A, R1, R2, B):
+        rsvp = n.network_manager.protocol_stack[1]
+        rsvp.set_swapping_success_rate(swap_success)
+
     return A, R1, R2, B
 
 
-def run_trial(trial_idx: int, args: argparse.Namespace, pt: str) -> Dict[str, float | bool]:
-    tl = Timeline(stop_time=int(args.deadline))
+def run_trial(trial_idx: int, args: argparse.Namespace, pt: str, deadline_ps: int) -> Dict[str, float | bool]:
+    tl = Timeline(stop_time=deadline_ps)
     tl.params = {}
     seed = None if args.seed is None else args.seed + trial_idx
     if seed is not None:
         np.random.seed(seed)
     dqt_prob = args.qt_eff if args.qt_eff is not None else args.dqt_eta_source * args.dqt_eta_dest
-    A, R1, R2, B = build_network(tl, args.distance, dqt_prob if pt == DQT else None, args.eta_source, args.eta_dest, args.dqt_eta_source, args.dqt_eta_dest)
+    A, R1, R2, B = build_network(
+        tl,
+        args.distance,
+        dqt_prob if pt == DQT else None,
+        args.eta_source,
+        args.eta_dest,
+        args.dqt_eta_source,
+        args.dqt_eta_dest,
+        args.mem_coh_s,
+        args.swap_success,
+    )
 
     satisfied = {"done": False, "time": None}
 
-    def check_success():
-        memA = A.components[A.memo_arr_name].memories
-        memR1 = R1.components[R1.memo_arr_name].memories
-        memR2 = R2.components[R2.memo_arr_name].memories
-        memB = B.components[B.memo_arr_name].memories
-        links = [
-            any(m.entangled_memory for m in memA),
-            any(m.entangled_memory for m in memR1) and any(m.entangled_memory for m in memR2),
-            any(m.entangled_memory for m in memB),
-        ]
-        if all(links):
-            satisfied["done"] = True
-            satisfied["time"] = tl.now()
-            tl.stop()
+    appA = RequestApp(A)
+    appB = RequestApp(B)
+
+    success_time = {"t": None}
+
+    orig_get_memory = appB.get_memory
+
+    def get_memory_wrapper(info):
+        orig_get_memory(info)
+        if info.state == "ENTANGLED" and info.remote_node == A.name and info.fidelity >= 0:
+            if appB.memory_counter > 0 and success_time["t"] is None:
+                success_time["t"] = tl.now()
+                tl.stop()
+
+    appB.get_memory = get_memory_wrapper  # type: ignore
 
     original_updates = {}
     for router in (A, R1, R2, B):
@@ -180,18 +217,21 @@ def run_trial(trial_idx: int, args: argparse.Namespace, pt: str) -> Dict[str, fl
 
         rm.update = make_update(original_updates[rm])  # type: ignore
 
+    appA.start(B.name, start_t=0, end_t=deadline_ps, memo_size=1, fidelity=0.9)
+
     tl.init()
     tl.run()
 
-    return {"success": satisfied["done"], "t_success": satisfied["time"]}
+    return {"success": success_time["t"] is not None, "t_success": success_time["t"]}
 
 
 def run_trials(args: argparse.Namespace) -> Dict[str, any]:
     pt = set_strategy(args.strategy)
+    deadline_ps = int(args.deadline_ps if args.deadline_s is None else args.deadline_s * 1e12)
     successes = 0
     times: List[int] = []
     for i in range(args.num_trials):
-        res = run_trial(i, args, pt)
+        res = run_trial(i, args, pt, deadline_ps)
         if res["success"]:
             successes += 1
             times.append(res["t_success"])
@@ -201,7 +241,8 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
         "arch": args.arch,
         "strategy": args.strategy,
         "distance_per_link": args.distance,
-        "deadline": args.deadline,
+        "deadline_ps": deadline_ps,
+        "deadline_s": deadline_ps / 1e12,
         "num_trials": args.num_trials,
         "satisfied": successes,
         "availability_req": availability,
@@ -212,6 +253,8 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
             "dqt_eta_source": args.dqt_eta_source,
             "dqt_eta_dest": args.dqt_eta_dest,
             "qt_eff": args.qt_eff,
+            "swap_success": args.swap_success,
+            "mem_coh_s": args.mem_coh_s,
         },
     }
 
@@ -220,15 +263,16 @@ def emit(result: Dict[str, any], fmt: str) -> str:
     if fmt == "json":
         return json.dumps(result, indent=2)
     if fmt == "csv":
-        headers = ["arch", "strategy", "distance_per_link", "deadline", "num_trials", "satisfied", "availability_req", "mean_t_success"]
+        headers = ["arch", "strategy", "distance_per_link", "deadline_ps", "deadline_s", "num_trials", "satisfied", "availability_req", "mean_t_success"]
         values = [str(result.get(h, "")) for h in headers]
         return ",".join(headers) + "\n" + ",".join(values)
-    headers = ["arch", "strategy", "distance_per_link", "deadline", "num_trials", "satisfied", "availability_req", "mean_t_success"]
+    headers = ["arch", "strategy", "distance_per_link", "deadline_ps", "deadline_s", "num_trials", "satisfied", "availability_req", "mean_t_success"]
     row = [
         result.get("arch"),
         result.get("strategy"),
         f"{result.get('distance_per_link')}",
-        f"{result.get('deadline')}",
+        f"{result.get('deadline_ps')}",
+        f"{result.get('deadline_s'):.6f}",
         str(result.get("num_trials")),
         str(result.get("satisfied")),
         f"{result.get('availability_req'):.3f}",

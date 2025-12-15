@@ -15,7 +15,7 @@ def test_qn_network_availability_sequence_smoke():
         "BK",
         "--distance",
         "1e3",
-        "--deadline",
+        "--deadline-ps",
         "2e4",
         "--num-trials",
         "5",
@@ -30,3 +30,11 @@ def test_qn_network_availability_sequence_smoke():
     data = json.loads(out.read_text())
     assert 0.0 <= data["availability_req"] <= 1.0
     assert data["satisfied"] <= data["num_trials"]
+
+    # monotonicity: larger deadline should not reduce availability (loose check)
+    out2 = Path("/tmp/qn_net_avail_seq_smoke_long.json")
+    cmd[cmd.index("--deadline-ps") + 1] = "2e5"
+    cmd[-1] = str(out2)
+    subprocess.check_call(cmd)
+    data2 = json.loads(out2.read_text())
+    assert data2["availability_req"] + 1e-6 >= data["availability_req"]
