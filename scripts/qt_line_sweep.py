@@ -35,7 +35,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attempts", type=int, default=200, help="Attempts per seed (fixed_attempts mode).")
     parser.add_argument("--eta-source", type=float, default=0.8, help="EQT: source efficiency.")
     parser.add_argument("--eta-dest", type=float, default=0.8, help="EQT: dest efficiency.")
-    parser.add_argument("--qt-eff", type=float, default=0.7, help="DQT: success probability for qt path.")
+    parser.add_argument("--qt-eff", type=float, default=None, help="DQT: legacy success probability (overridden by dqt-eta-*).")
+    parser.add_argument("--dqt-eta-source", type=float, default=1.0, help="DQT: source efficiency (default 1.0)")
+    parser.add_argument("--dqt-eta-dest", type=float, default=0.7, help="DQT: dest efficiency (default 0.7 => matches prior 0.7 qt_eff)")
     parser.add_argument("--stop-time", type=float, default=5e12, help="Timeline stop_time safety cap.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Directory to write raw/aggregated CSV.")
     return parser.parse_args()
@@ -86,7 +88,7 @@ def write_agg(out_path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in rows:
-            writer.writerow(r)
+                writer.writerow(r)
 
 
 def main() -> None:
@@ -111,6 +113,8 @@ def main() -> None:
                     distance=dist,
                     mode="fixed_attempts",
                     stop_time=args.stop_time,
+                    dqt_eta_source=args.dqt_eta_source,
+                    dqt_eta_dest=args.dqt_eta_dest,
                 )
                 result["seed"] = seed
                 result["num_attempts"] = args.attempts  # target attempts per seed

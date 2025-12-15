@@ -74,8 +74,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--qt-eff",
         type=float,
+        default=None,
+        help="DQT 用: トランスデューサ経路の成功確率（後方互換用。dqt-eta-* を優先）",
+    )
+    parser.add_argument(
+        "--dqt-eta-source",
+        type=float,
+        default=1.0,
+        help="DQT 用: 送信側トランスデューサ効率（デフォルト 1.0, dest=0.7 で 0.7 に一致）",
+    )
+    parser.add_argument(
+        "--dqt-eta-dest",
+        type=float,
         default=0.7,
-        help="DQT 用: トランスデューサ経路の成功確率（デフォルト 0.7）",
+        help="DQT 用: 受信側トランスデューサ効率（デフォルト 0.7, source=1.0 で 0.7 に一致）",
     )
     parser.add_argument(
         "--distance",
@@ -215,7 +227,9 @@ def run_experiment(
     seed: int | None,
     eta_source: float,
     eta_dest: float,
-    qt_eff: float,
+    qt_eff: float | None,
+    dqt_eta_source: float,
+    dqt_eta_dest: float,
     distance: float,
     mode: str,
     stop_time: float,
@@ -240,9 +254,11 @@ def run_experiment(
         EntanglementGenerationA.create = classmethod(eqt_create)  # type: ignore[assignment]
         patched = True
     elif protocol_type == DQT:
+        # DQT のトランスデューサ成功確率 = eta_source * eta_dest (qt_eff 指定時はそれを優先)
+        success_prob = qt_eff if qt_eff is not None else dqt_eta_source * dqt_eta_dest
 
         def dqt_create(cls, owner, name, middle, other, memory, **kwargs):
-            kwargs.setdefault("qt_emitter", _make_dqt_emitter(owner, memory, middle, qt_eff))
+            kwargs.setdefault("qt_emitter", _make_dqt_emitter(owner, memory, middle, success_prob))
             return orig_create(cls, owner, name, middle, other, memory, **kwargs)
 
         EntanglementGenerationA.create = classmethod(dqt_create)  # type: ignore[assignment]
@@ -385,6 +401,8 @@ def main():
             distance=dist,
             mode=args.mode,
             stop_time=args.stop_time,
+            dqt_eta_source=args.dqt_eta_source,
+            dqt_eta_dest=args.dqt_eta_dest,
         )
         results.append(result)
 

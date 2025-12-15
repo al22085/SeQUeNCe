@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", type=str, required=True, help="Comma list of seeds.")
     parser.add_argument("--attempts", type=int, default=1000, help="Attempts per seed (fixed_attempts).")
     parser.add_argument("--stop-time", type=float, default=5e12, help="Timeline stop_time safety cap.")
+    parser.add_argument("--dqt-eta-source", type=float, default=1.0, help="(Optional) DQT source efficiency for future extension.")
+    parser.add_argument("--dqt-eta-dest", type=float, default=0.7, help="(Optional) DQT dest efficiency for future extension.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for CSVs/plots.")
     return parser.parse_args()
 
