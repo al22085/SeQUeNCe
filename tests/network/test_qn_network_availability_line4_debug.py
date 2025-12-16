@@ -42,5 +42,6 @@ def test_line4_ideal_has_entanglement_events():
     result = run_trials(args)
     dbg = result.get("debug_summary", {})
     assert dbg.get("entangled_total", 0) > 0
-    assert dbg.get("swap_events", 0) > 0
+    assert dbg.get("stage2_swaps", 0) > 0
+    assert dbg.get("pair_counts", {}).get("A/B", 0) > 0
     assert result["availability_req"] > 0
