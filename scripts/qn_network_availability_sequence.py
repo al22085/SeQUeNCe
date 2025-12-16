@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional
@@ -26,6 +27,7 @@ from sequence.kernel.timeline import Timeline
 from sequence.network_management.network_manager import StaticRoutingProtocol
 from sequence.topology.node import QuantumRouter, BSMNode
 from sequence.app.request_app import RequestApp
+from sequence.resource_management.memory_manager import MemoryInfo
 
 
 def sec_to_ps(s: float) -> int:
@@ -60,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attn", type=float, default=2e-4, help="Fiber attenuation coefficient for quantum channels.")
     p.add_argument("--cc-delay", type=float, default=1e9, help="Classical channel delay (ps).")
     p.add_argument("--sanity", choices=["off", "ideal"], default="off", help="ideal forces near-deterministic params (short links, eta=1, low delays).")
+    p.add_argument("--debug", action="store_true", help="Print per-trial debug counters (entanglement/swaps/reservations).")
     p.add_argument("--format", choices=["md", "json", "csv"], default="md")
     p.add_argument("--out", type=Path, default=None)
     return p.parse_args()
@@ -237,12 +240,58 @@ def run_trial(
     appA.get_memory = _wrap_get_memory(appA, tl, B.name, success_time)  # type: ignore
     appB.get_memory = _wrap_get_memory(appB, tl, A.name, success_time)  # type: ignore
 
+    neighbor_map = {
+        A.name: {R1.name},
+        R1.name: {A.name, R2.name},
+        R2.name: {R1.name, B.name},
+        B.name: {R2.name},
+    }
+
+    def link_key(a: str, b: str) -> str:
+        return " - ".join(sorted([a, b]))
+
+    dbg_counts = {
+        "entangled_total": 0,
+        "link_counts": defaultdict(int),
+        "swap_events": 0,
+    }
+
+    def make_update_wrapper(rm, node_name: str):
+        orig_update = rm.update
+
+        def wrapper(protocol, memory, state):
+            orig_update(protocol, memory, state)
+            if state == MemoryInfo.ENTANGLED:
+                info = rm.memory_manager.get_info_by_memory(memory)
+                remote = info.remote_node
+                dbg_counts["entangled_total"] += 1
+                if remote is not None:
+                    dbg_counts["link_counts"][link_key(node_name, remote)] += 1
+                    if remote not in neighbor_map.get(node_name, set()):
+                        dbg_counts["swap_events"] += 1
+        return wrapper
+
+    for node in (A, R1, R2, B):
+        node.resource_manager.update = make_update_wrapper(node.resource_manager, node.name)  # type: ignore
+
     appA.start(B.name, start_t=start_time_ps, end_t=end_time_ps, memo_size=1, fidelity=0.9)
 
     tl.init()
     tl.run()
 
-    return {"success": success_time["t"] is not None, "t_success": success_time["t"]}
+    accepted_res = {n.name: len(n.network_manager.protocol_stack[1].accepted_reservations) for n in (A, R1, R2, B)}
+    dbg_counts["link_counts"] = dict(dbg_counts["link_counts"])
+
+    return {
+        "success": success_time["t"] is not None,
+        "t_success": success_time["t"],
+        "dbg": {
+            "entangled_total": dbg_counts["entangled_total"],
+            "link_counts": dbg_counts["link_counts"],
+            "swap_events": dbg_counts["swap_events"],
+            "accepted_res": accepted_res,
+        },
+    }
 
 
 def run_trials(args: argparse.Namespace) -> Dict[str, any]:
@@ -266,12 +315,35 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
     deadline_ps = end_time_ps
     successes = 0
     times: List[int] = []
+    debug_acc = {
+        "entangled_total": 0,
+        "swap_events": 0,
+        "link_counts": defaultdict(int),
+        "accepted_res": defaultdict(int),
+    }
     try:
         for i in range(resolved.num_trials):
             res = run_trial(i, resolved, pt, start_time_ps, end_time_ps)
             if res["success"]:
                 successes += 1
                 times.append(res["t_success"])  # type: ignore
+            if resolved.debug:
+                dbg = res["dbg"]  # type: ignore
+                debug_acc["entangled_total"] += dbg["entangled_total"]
+                debug_acc["swap_events"] += dbg["swap_events"]
+                for lk, cnt in dbg["link_counts"].items():
+                    debug_acc["link_counts"][lk] += cnt
+                for node, cnt in dbg["accepted_res"].items():
+                    debug_acc["accepted_res"][node] += cnt
+                print(json.dumps({
+                    "trial": i,
+                    "success": res["success"],
+                    "t_success": res["t_success"],
+                    "entangled_total": dbg["entangled_total"],
+                    "link_counts": dbg["link_counts"],
+                    "swap_events": dbg["swap_events"],
+                    "accepted_res": dbg["accepted_res"],
+                }))
     finally:
         restore_generation(orig_create)
 
@@ -307,6 +379,13 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
             "sanity": resolved.sanity,
         },
     }
+    if resolved.debug:
+        result["debug_summary"] = {
+            "entangled_total": debug_acc["entangled_total"],
+            "swap_events": debug_acc["swap_events"],
+            "link_counts": dict(debug_acc["link_counts"]),
+            "accepted_res": dict(debug_acc["accepted_res"]),
+        }
     return result
 
 
