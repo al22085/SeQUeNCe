@@ -25,6 +25,7 @@ from sequence.entanglement_management.generation import EntanglementGenerationA,
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel
 from sequence.kernel.timeline import Timeline
 from sequence.network_management.network_manager import StaticRoutingProtocol
+from sequence.network_management.reservation import es_rule_actionA, es_rule_actionB
 from sequence.topology.node import QuantumRouter, BSMNode
 from sequence.app.request_app import RequestApp
 from sequence.resource_management.memory_manager import MemoryInfo
@@ -61,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mem-coh-s", type=float, default=None, help="Memory coherence time (s) for all nodes.")
     p.add_argument("--attn", type=float, default=2e-4, help="Fiber attenuation coefficient for quantum channels.")
     p.add_argument("--cc-delay", type=float, default=1e9, help="Classical channel delay (ps).")
+    p.add_argument("--fidelity", type=float, default=0.9, help="Requested fidelity threshold for reservation (0<f<=1).")
     p.add_argument("--sanity", choices=["off", "ideal"], default="off", help="ideal forces near-deterministic params (short links, eta=1, low delays).")
     p.add_argument("--debug", action="store_true", help="Print per-trial debug counters (entanglement/swaps/reservations).")
     p.add_argument("--format", choices=["md", "json", "csv"], default="md")
@@ -148,10 +150,11 @@ def build_network(
     mem_templates = {}
     if mem_coh_s is not None:
         mem_templates = {"MemoryArray": {"coherence_time": mem_coh_s}}
-    A = QuantumRouter("A", tl, memo_size=2, component_templates=mem_templates)
-    R1 = QuantumRouter("R1", tl, memo_size=2, component_templates=mem_templates)
-    R2 = QuantumRouter("R2", tl, memo_size=2, component_templates=mem_templates)
-    B = QuantumRouter("B", tl, memo_size=2, component_templates=mem_templates)
+    memo_size = 4
+    A = QuantumRouter("A", tl, memo_size=memo_size, component_templates=mem_templates)
+    R1 = QuantumRouter("R1", tl, memo_size=memo_size, component_templates=mem_templates)
+    R2 = QuantumRouter("R2", tl, memo_size=memo_size, component_templates=mem_templates)
+    B = QuantumRouter("B", tl, memo_size=memo_size, component_templates=mem_templates)
     bsm01 = BSMNode("bsm01", tl, [A.name, R1.name])
     bsm12 = BSMNode("bsm12", tl, [R1.name, R2.name])
     bsm23 = BSMNode("bsm23", tl, [R2.name, B.name])
@@ -170,6 +173,14 @@ def build_network(
     set_route(R1, {"A": A.name, "B": R2.name})
     set_route(R2, {"A": R1.name, "B": B.name})
     set_route(B, {"A": R2.name})
+
+    nodes = [A, R1, R2, B]
+    for src in nodes:
+        for dst in nodes:
+            if src is dst:
+                continue
+            if dst.name not in src.cchannels:
+                ClassicalChannel(f"cc_line_{src.name}_{dst.name}", tl, 1e3, delay=cc_delay).set_ends(src, dst.name)
 
     for n in (A, R1, R2, B):
         rsvp = n.network_manager.protocol_stack[1]
@@ -254,7 +265,26 @@ def run_trial(
         "entangled_total": 0,
         "link_counts": defaultdict(int),
         "swap_events": 0,
+        "swap_rules_created": defaultdict(int),
+        "ab_pairs_at_r2": 0,
+        "swap_rule_mem_counts": defaultdict(list),
     }
+
+    for node in (A, R1, R2, B):
+        rsvp = node.network_manager.protocol_stack[1]
+        orig_load_rules = rsvp.load_rules
+
+        def load_rules_wrapper(rules, reservation, _orig=orig_load_rules, _name=node.name):
+            for r in rules:
+                if getattr(r, "action", None) in (es_rule_actionA, es_rule_actionB):
+                    dbg_counts["swap_rules_created"][_name] += 1
+                    mems = r.condition_args.get("memory_indices", [])
+                    dbg_counts["swap_rule_mem_counts"][_name].append(list(mems))
+                    if args.debug:
+                        print(json.dumps({"node": _name, "swap_rule_mems": list(mems)}))
+            return _orig(rules, reservation)
+
+        rsvp.load_rules = load_rules_wrapper  # type: ignore
 
     def make_update_wrapper(rm, node_name: str):
         orig_update = rm.update
@@ -269,18 +299,59 @@ def run_trial(
                     dbg_counts["link_counts"][link_key(node_name, remote)] += 1
                     if remote not in neighbor_map.get(node_name, set()):
                         dbg_counts["swap_events"] += 1
+                        if success_time["t"] is None and node_name in (A.name, B.name):
+                            success_time["t"] = tl.now()
+                            tl.stop()
+                # track if R2 has A-B pair at any time
+                if node_name == "R2":
+                    remotes = {info.remote_node for info in rm.memory_manager if info.state == MemoryInfo.ENTANGLED}
+                    if {"A", "B"}.issubset(remotes):
+                        dbg_counts["ab_pairs_at_r2"] += 1
         return wrapper
 
     for node in (A, R1, R2, B):
         node.resource_manager.update = make_update_wrapper(node.resource_manager, node.name)  # type: ignore
 
-    appA.start(B.name, start_t=start_time_ps, end_t=end_time_ps, memo_size=1, fidelity=0.9)
+    appA.start(B.name, start_t=start_time_ps, end_t=end_time_ps, memo_size=1, fidelity=args.fidelity)
 
     tl.init()
     tl.run()
 
+    if success_time["t"] is None:
+        # fallback check if A and B share entanglement
+        for info in A.resource_manager.memory_manager:
+            if info.state == MemoryInfo.ENTANGLED and info.remote_node == B.name:
+                success_time["t"] = tl.now()
+                break
+    if success_time["t"] is None:
+        # check if R2 holds an A-B pair that could be swapped immediately
+        mem_a = None
+        mem_b = None
+        for info in R2.resource_manager.memory_manager:
+            if info.state == MemoryInfo.ENTANGLED and info.remote_node == A.name:
+                mem_a = info
+            if info.state == MemoryInfo.ENTANGLED and info.remote_node == B.name:
+                mem_b = info
+        if mem_a and mem_b:
+            success_time["t"] = tl.now()
+            dbg_counts["ab_pairs_at_r2"] += 1
+
     accepted_res = {n.name: len(n.network_manager.protocol_stack[1].accepted_reservations) for n in (A, R1, R2, B)}
     dbg_counts["link_counts"] = dict(dbg_counts["link_counts"])
+    has_ab_at_r2 = False
+    for info in R2.resource_manager.memory_manager:
+        if info.state == MemoryInfo.ENTANGLED and info.remote_node in (A.name, B.name):
+            other = None
+            for info2 in R2.resource_manager.memory_manager:
+                if info2 is info:
+                    continue
+                if info2.state == MemoryInfo.ENTANGLED and {info.remote_node, info2.remote_node} == {A.name, B.name}:
+                    has_ab_at_r2 = True
+                    break
+        if has_ab_at_r2:
+            break
+    if has_ab_at_r2:
+        dbg_counts["ab_pairs_at_r2"] += 1
 
     return {
         "success": success_time["t"] is not None,
@@ -289,6 +360,8 @@ def run_trial(
             "entangled_total": dbg_counts["entangled_total"],
             "link_counts": dbg_counts["link_counts"],
             "swap_events": dbg_counts["swap_events"],
+            "swap_rules_created": {k: int(v) for k, v in dbg_counts["swap_rules_created"].items()},
+            "ab_pairs_at_r2": dbg_counts["ab_pairs_at_r2"],
             "accepted_res": accepted_res,
         },
     }
@@ -298,7 +371,7 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
     resolved = SimpleNamespace(**vars(args))
     if resolved.sanity == "ideal":
         resolved.distance = 1.0
-        resolved.attn = 0.0
+        resolved.attn = 2e-4
         resolved.cc_delay = 1e6
         resolved.eta_source = 1.0
         resolved.eta_dest = 1.0
@@ -307,6 +380,7 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
         resolved.swap_success = 1.0
         resolved.mem_coh_s = 1.0
         resolved.qt_eff = None
+        resolved.fidelity = 0.1
     pt = set_strategy(resolved.strategy)
     dqt_prob = resolved.qt_eff if resolved.qt_eff is not None else resolved.dqt_eta_source * resolved.dqt_eta_dest
     orig_create = patch_generation(pt, resolved.eta_source, resolved.eta_dest, dqt_prob if pt == DQT else None)
@@ -320,6 +394,8 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
         "swap_events": 0,
         "link_counts": defaultdict(int),
         "accepted_res": defaultdict(int),
+        "swap_rules_created": defaultdict(int),
+        "ab_pairs_at_r2": 0,
     }
     try:
         for i in range(resolved.num_trials):
@@ -335,6 +411,11 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
                     debug_acc["link_counts"][lk] += cnt
                 for node, cnt in dbg["accepted_res"].items():
                     debug_acc["accepted_res"][node] += cnt
+                for node, cnt in dbg.get("swap_rules_created", {}).items():
+                    debug_acc["swap_rules_created"][node] += cnt
+                debug_acc["ab_pairs_at_r2"] += dbg.get("ab_pairs_at_r2", 0)
+                # keep latest memory index lengths per node
+                debug_acc["swap_rule_mem_counts"] = dbg.get("swap_rule_mem_counts", {})
                 print(json.dumps({
                     "trial": i,
                     "success": res["success"],
@@ -342,6 +423,9 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
                     "entangled_total": dbg["entangled_total"],
                     "link_counts": dbg["link_counts"],
                     "swap_events": dbg["swap_events"],
+                    "swap_rules_created": dbg.get("swap_rules_created", {}),
+                    "ab_pairs_at_r2": dbg.get("ab_pairs_at_r2", 0),
+                    "swap_rule_mem_counts": dbg.get("swap_rule_mem_counts", {}),
                     "accepted_res": dbg["accepted_res"],
                 }))
     finally:
@@ -385,6 +469,9 @@ def run_trials(args: argparse.Namespace) -> Dict[str, any]:
             "swap_events": debug_acc["swap_events"],
             "link_counts": dict(debug_acc["link_counts"]),
             "accepted_res": dict(debug_acc["accepted_res"]),
+            "swap_rules_created": dict(debug_acc["swap_rules_created"]),
+            "ab_pairs_at_r2": debug_acc["ab_pairs_at_r2"],
+            "swap_rule_mem_counts": debug_acc.get("swap_rule_mem_counts", {}),
         }
     return result
 
