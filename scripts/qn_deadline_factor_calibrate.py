@@ -46,8 +46,8 @@ def build_args(base, arch: str, strategy: str, distance: float, factor: float, s
     dqt_eta_source = base.dqt_eta_source
     dqt_eta_dest = base.dqt_eta_dest
     if arch == "optical":
-        eta_source = eta_dest = 1.0
-        dqt_eta_source = dqt_eta_dest = 1.0
+        eta_source = eta_dest = base.optical_eta
+        dqt_eta_source = dqt_eta_dest = base.optical_eta
 
     ns = SimpleNamespace(
         strategy=strategy,
@@ -104,6 +104,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-start-delay-s", type=float, default=0.01)
     p.add_argument("--eta-source", type=float, default=0.8)
     p.add_argument("--eta-dest", type=float, default=0.8)
+    p.add_argument("--optical-eta", type=float, default=1.0, help="Effective eta for optical arch (defaults to 1.0).")
     p.add_argument("--dqt-eta-source", type=float, default=0.8)
     p.add_argument("--dqt-eta-dest", type=float, default=0.8)
     p.add_argument("--qt-eff", type=float, default=None)
@@ -116,12 +117,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--target-low", type=float, default=0.2)
     p.add_argument("--target-high", type=float, default=0.8)
     p.add_argument("--recommend-common-factor", action="store_true", help="If set, compute a single factor per arch that minimizes saturation across strategies.")
+    p.add_argument("--allow-swap-success", action="store_true", help="Permit swap_success != 1.0 (default disallows to keep physics-based).")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_deadline_calibrate"))
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.swap_success != 1.0 and not args.allow_swap_success:
+        raise ValueError("swap_success != 1.0 requires --allow-swap-success (prefer physical loss knobs).")
     strategies = parse_list(args.strategies, str)
     archs = parse_list(args.archs, str)
     factors = parse_list(args.factors, float)

@@ -16,7 +16,8 @@ python scripts/qn_deadline_factor_calibrate.py \
   --deadline-mode scaled \
   --setup-factor 500 \
   --fidelity 0.5 \
-  --swap-success 0.5 \
+  --mem-coh-s 0.02 \
+  --attn 0.0015 \
   --eta-source 0.8 --eta-dest 0.8 \
   --dqt-eta-source 0.8 --dqt-eta-dest 0.8 \
   --recommend-common-factor \
@@ -56,7 +57,8 @@ python scripts/qn_network_sweep.py \
   --deadline-mode scaled \
   --deadline-factor "${COMMON_OPTICAL:-1000}" \
   --setup-factor 500 \
-  --swap-success 0.5 \
+  --mem-coh-s 0.02 \
+  --attn 0.0015 \
   --fidelity 0.5 \
   --eta-source 0.8 --eta-dest 0.8 \
   --dqt-eta-source 0.8 --dqt-eta-dest 0.8 \
@@ -71,7 +73,8 @@ python scripts/qn_network_sweep.py \
   --deadline-mode scaled \
   --deadline-factor "${COMMON_HYBRID:-1000}" \
   --setup-factor 500 \
-  --swap-success 0.5 \
+  --mem-coh-s 0.02 \
+  --attn 0.0015 \
   --fidelity 0.5 \
   --eta-source 0.8 --eta-dest 0.8 \
   --dqt-eta-source 0.8 --dqt-eta-dest 0.8 \

@@ -35,13 +35,8 @@ def build_args(base, arch: str, strategy: str, distance: float, seed: int) -> Si
     dqt_eta_source = base.dqt_eta_source
     dqt_eta_dest = base.dqt_eta_dest
     if arch == "optical":
-        eta_source = eta_dest = 1.0
-        dqt_eta_source = dqt_eta_dest = 1.0
-    elif arch == "hybrid":
-        eta_source = base.eta_source
-        eta_dest = base.eta_dest
-        dqt_eta_source = base.dqt_eta_source
-        dqt_eta_dest = base.dqt_eta_dest
+        eta_source = eta_dest = base.optical_eta
+        dqt_eta_source = dqt_eta_dest = base.optical_eta
 
     return SimpleNamespace(
         strategy=strategy,
@@ -88,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-start-delay-s", type=float, default=0.01)
     p.add_argument("--eta-source", type=float, default=0.8)
     p.add_argument("--eta-dest", type=float, default=0.8)
+    p.add_argument("--optical-eta", type=float, default=1.0, help="Effective eta for optical arch (defaults to 1.0).")
     p.add_argument("--dqt-eta-source", type=float, default=0.8)
     p.add_argument("--dqt-eta-dest", type=float, default=0.8)
     p.add_argument("--qt-eff", type=float, default=None)
