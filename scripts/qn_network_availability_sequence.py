@@ -27,7 +27,7 @@ from sequence.kernel.timeline import Timeline
 from sequence.network_management.network_manager import StaticRoutingProtocol
 from sequence.network_management.reservation import es_rule_actionA, es_rule_actionB
 from sequence.topology.node import QuantumRouter, BSMNode
-from sequence.app.request_app import RequestApp
+from sequence.app.benchmark_request_app import BenchmarkRequestApp
 from sequence.resource_management.memory_manager import MemoryInfo
 
 
@@ -189,17 +189,6 @@ def build_network(
     return A, R1, R2, B
 
 
-def _wrap_get_memory(app: RequestApp, tl: Timeline, remote_name: str, success_time: dict):
-    def wrapper(info):
-        if info.state == "ENTANGLED" and info.remote_node == remote_name:
-            if success_time["t"] is None:
-                success_time["t"] = tl.now()
-                success_time["ab_count"] = success_time.get("ab_count", 0) + 1
-                tl.stop()
-
-    return wrapper
-
-
 def is_ab_entangled(A: QuantumRouter, B: QuantumRouter) -> tuple[bool, int]:
     count = 0
     for info in A.resource_manager.memory_manager:
@@ -250,12 +239,16 @@ def run_trial(
         args.cc_delay,
     )
 
-    appA = RequestApp(A)
-    appB = RequestApp(B)
     success_time = {"t": None}
 
-    appA.get_memory = _wrap_get_memory(appA, tl, B.name, success_time)  # type: ignore
-    appB.get_memory = _wrap_get_memory(appB, tl, A.name, success_time)  # type: ignore
+    def record_delivery(info):
+        if info.remote_node == B.name and success_time["t"] is None:
+            success_time["t"] = tl.now()
+            success_time["ab_count"] = success_time.get("ab_count", 0) + 1
+            tl.stop()
+
+    appA = BenchmarkRequestApp(A, hold_memories=True, on_delivery=record_delivery)
+    appB = BenchmarkRequestApp(B, hold_memories=True)
 
     neighbor_map = {
         A.name: {R1.name},
