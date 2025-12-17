@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import math
 import sys
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Tuple
@@ -100,6 +102,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attn", type=float, default=0.005)
     p.add_argument("--cc-delay", type=float, default=1e6)
     p.add_argument("--fidelity", type=float, default=0.5)
+    p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
+    p.add_argument("--resume", action="store_true", help="Resume from existing raw CSV to skip completed cells.")
+    p.add_argument("--base-seed", type=int, default=0, help="Base seed used to derive deterministic per-cell seeds.")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_phase_sweep"))
     return p.parse_args()
 
@@ -111,34 +116,9 @@ def main():
     etas = parse_list(args.etas, float)
     seeds = parse_list(args.seeds, int)
 
-    raw_rows = []
-    agg_map: Dict[Tuple[float, float, str], List[float]] = defaultdict(list)
-
-    for dist in distances:
-        for eta in etas:
-            for strategy in strategies:
-                for seed in seeds:
-                    ns = build_args(args, strategy, dist, eta, seed)
-                    res = run_trials(ns)
-                    raw_rows.append(
-                        (
-                            dist,
-                            eta,
-                            strategy,
-                            seed,
-                            res["num_trials"],
-                            res["satisfied"],
-                            res["availability_req"],
-                            res["mean_t_success"],
-                            res["deadline_s"],
-                            res["deadline_ps"],
-                            res["setup_slack_s"],
-                        )
-                    )
-                    agg_map[(dist, eta, strategy)].append(res["availability_req"])
-
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = out_dir / "phase_raw.csv"
     raw_headers = [
         "distance",
         "eta",
@@ -151,8 +131,127 @@ def main():
         "deadline_s",
         "deadline_ps",
         "setup_slack_s",
+        "status",
+        "error",
     ]
-    write_csv(out_dir / "phase_raw.csv", raw_headers, raw_rows)
+    done = set()
+    if args.resume and raw_path.exists():
+        with raw_path.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("status", "ok") == "ok":
+                    done.add((float(row["distance"]), float(row["eta"]), row["strategy"], int(row["seed"])))
+
+    def cell_seed(strategy: str, distance: float, eta: float, seed: int) -> int:
+        key = f"{strategy}:{distance}:{eta}:{seed}:{args.base_seed}"
+        val = int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") % (2**31)
+        return args.base_seed + val
+
+    tasks = []
+    for dist in distances:
+        for eta in etas:
+            for strategy in strategies:
+                for seed in seeds:
+                    key = (dist, eta, strategy, seed)
+                    if key in done:
+                        continue
+                    tasks.append(key)
+
+    mode = "a" if raw_path.exists() else "w"
+    with raw_path.open(mode, newline="") as f_raw:
+        writer = csv.writer(f_raw)
+        if mode == "w":
+            writer.writerow(raw_headers)
+            f_raw.flush()
+
+        def run_cell(key):
+            dist, eta, strat, seed = key
+            try:
+                ns = build_args(args, strat, dist, eta, seed)
+                ns.seed = cell_seed(strat, dist, eta, seed)
+                res = run_trials(ns)
+                return (
+                    dist,
+                    eta,
+                    strat,
+                    seed,
+                    res["num_trials"],
+                    res["satisfied"],
+                    res["availability_req"],
+                    res["mean_t_success"],
+                    res["deadline_s"],
+                    res["deadline_ps"],
+                    res["setup_slack_s"],
+                    "ok",
+                    "",
+                )
+            except Exception as e:  # noqa: BLE001
+                return (
+                    dist,
+                    eta,
+                    strat,
+                    seed,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "error",
+                    str(e),
+                )
+
+        results: List[Tuple] = []
+        if tasks:
+            max_workers = min(args.workers, 4)
+            if max_workers <= 1:
+                for t in tasks:
+                    row = run_cell(t)
+                    writer.writerow(row)
+                    f_raw.flush()
+                    if row[-2] == "ok":
+                        results.append(row)
+            else:
+                try:
+                    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+                        future_map = {ex.submit(run_cell, t): t for t in tasks}
+                        for fut in as_completed(future_map):
+                            row = fut.result()
+                            writer.writerow(row)
+                            f_raw.flush()
+                            if row[-2] == "ok":
+                                results.append(row)
+                except PermissionError:
+                    # Fallback to serial if process pool is not permitted
+                    for t in tasks:
+                        row = run_cell(t)
+                        writer.writerow(row)
+                        f_raw.flush()
+                        if row[-2] == "ok":
+                            results.append(row)
+        else:
+            with raw_path.open() as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("status", "ok") == "ok":
+                        results.append(
+                            (
+                                float(row["distance"]),
+                                float(row["eta"]),
+                                row["strategy"],
+                                int(row["seed"]),
+                                int(row["num_trials"]),
+                                int(row["satisfied"]),
+                                float(row["availability_req"]),
+                                float(row["mean_t_success"]),
+                                float(row["deadline_s"]),
+                                float(row["deadline_ps"]),
+                                float(row["setup_slack_s"]),
+                                "ok",
+                                "",
+                            )
+                        )
 
     agg_headers = [
         "distance",
@@ -165,16 +264,30 @@ def main():
         "deadline_s",
         "deadline_ps",
         "setup_slack_s",
+        "runs_failed",
     ]
     agg_rows = []
-    for (dist, eta, strategy), vals in agg_map.items():
+    agg_map: Dict[Tuple[float, float, str], List[float]] = defaultdict(list)
+    meta_map: Dict[Tuple[float, float, str], Tuple[float, float, float]] = {}
+    fail_counts = defaultdict(int)
+    for row in results:
+        key = (row[0], row[1], row[2])
+        agg_map[key].append(row[6])
+        meta_map[key] = (row[8], row[9], row[10])
+    if raw_path.exists():
+        with raw_path.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("status", "ok") != "ok":
+                    key = (float(row["distance"]), float(row["eta"]), row["strategy"])
+                    fail_counts[key] += 1
+
+    for key, vals in agg_map.items():
+        dist, eta, strategy = key
         n = len(vals)
         mean = float(np.mean(vals)) if vals else 0.0
         std = float(np.std(vals, ddof=0)) if vals else 0.0
-        # lookup deadline/slack from first matching raw row
-        dl_s = next((r[8] for r in raw_rows if r[0] == dist and r[1] == eta and r[2] == strategy), None)
-        dl_ps = next((r[9] for r in raw_rows if r[0] == dist and r[1] == eta and r[2] == strategy), None)
-        slack = next((r[10] for r in raw_rows if r[0] == dist and r[1] == eta and r[2] == strategy), None)
+        dl_s, dl_ps, slack = meta_map.get(key, (None, None, None))
         agg_rows.append(
             (
                 dist,
@@ -187,6 +300,7 @@ def main():
                 dl_s,
                 dl_ps,
                 slack,
+                fail_counts.get(key, 0),
             )
         )
     write_csv(out_dir / "phase_agg.csv", agg_headers, agg_rows)
