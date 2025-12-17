@@ -68,3 +68,15 @@ python scripts/qn_export_summary_table.py \
 python scripts/qn_key_service_availability.py \
   --preset preset_key_service_otp_smoke \
   --out-dir "${OUT_DIR}/key_service"
+
+# Key-service sweep (paper figure)
+python scripts/qn_key_service_sweep.py \
+  --preset preset_key_service_otp_smoke \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --resume \
+  --out-dir "${OUT_DIR}/key_service_sweep"
+
+python scripts/plot_qn_key_service_sweep.py \
+  --in-agg "${OUT_DIR}/key_service_sweep/key_service_sweep_agg.csv" \
+  --out-dir "${OUT_DIR}/key_service_sweep" \
+  --title "Key-service sweep (${MODE})"

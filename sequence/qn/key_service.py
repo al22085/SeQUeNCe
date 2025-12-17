@@ -44,9 +44,12 @@ def simulate_key_service(
     routing: str = "shortest",
     allow_wait: bool = True,
     reserve_mode: str = "upfront",
+    link_rates: Dict[Tuple[str, str], float] | None = None,
+    otp_directions: int = 2,
 ) -> Dict:
     assert routing == "shortest"
     assert reserve_mode == "upfront"
+    assert otp_directions in (1, 2)
     rng = np.random.default_rng(seed)
 
     # shortest paths via BFS (unweighted)
@@ -72,7 +75,12 @@ def simulate_key_service(
         for b in neighs:
             if (b, a) in links:
                 continue
-            rate = compute_link_key_rate(strategy, {}, strategy_params, base_key_rate_bps)
+            if link_rates and (a, b) in link_rates:
+                rate = link_rates[(a, b)]
+            elif link_rates and (b, a) in link_rates:
+                rate = link_rates[(b, a)]
+            else:
+                rate = compute_link_key_rate(strategy, {}, strategy_params, base_key_rate_bps)
             links[(a, b)] = {"rate": rate, "last": 0.0, "k": kmax_bits / 2}
             links[(b, a)] = links[(a, b)]
 
@@ -108,7 +116,7 @@ def simulate_key_service(
         # demand
         if crypto_model == "otp":
             duration = otp_session_duration_s
-            bits = otp_data_rate_bps * duration
+            bits = otp_data_rate_bps * duration * otp_directions
         else:
             bits = session_key_bits
 
