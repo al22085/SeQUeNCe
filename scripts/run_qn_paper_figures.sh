@@ -63,3 +63,8 @@ python scripts/qn_export_summary_table.py \
   --phase "${OUT_DIR}/phase/phase_crossover.csv" \
   --sensitivity "${OUT_DIR}/sensitivity/crossover_sensitivity.csv" \
   --out-dir "${OUT_DIR}"
+
+# Key-service run (smoke-level defaults for now)
+python scripts/qn_key_service_availability.py \
+  --preset preset_key_service_otp_smoke \
+  --out-dir "${OUT_DIR}/key_service"
