@@ -47,3 +47,7 @@ def nsfnet_topology():
         topo[a].append(b)
         topo[b].append(a)
     return topo
+
+
+def nsfnet_edges():
+    return list(NSFNET_EDGES)

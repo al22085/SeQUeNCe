@@ -80,3 +80,15 @@ python scripts/plot_qn_key_service_sweep.py \
   --in-agg "${OUT_DIR}/key_service_sweep/key_service_sweep_agg.csv" \
   --out-dir "${OUT_DIR}/key_service_sweep" \
   --title "Key-service sweep (${MODE})"
+
+# Migration frontier (paper figure)
+python scripts/qn_key_service_migration_frontier.py \
+  --preset preset_non_saturated_smoke \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --resume \
+  --out-dir "${OUT_DIR}/key_service_migration_frontier"
+
+python scripts/plot_qn_key_service_migration_frontier.py \
+  --in-agg "${OUT_DIR}/key_service_migration_frontier/frontier_agg.csv" \
+  --out-dir "${OUT_DIR}/key_service_migration_frontier" \
+  --title "Migration frontier (${MODE})"
