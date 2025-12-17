@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_network_availability_sequence import run_trials
+from scripts.qn_experiment_presets import apply_preset
 
 
 def parse_list(raw: str, cast=float) -> List:
@@ -102,6 +103,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attn", type=float, default=0.005)
     p.add_argument("--cc-delay", type=float, default=1e6)
     p.add_argument("--fidelity", type=float, default=0.5)
+    p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
     p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
     p.add_argument("--resume", action="store_true", help="Resume from existing raw CSV to skip completed cells.")
     p.add_argument("--base-seed", type=int, default=0, help="Base seed used to derive deterministic per-cell seeds.")
@@ -111,6 +113,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    args = apply_preset(args, args.preset)
     strategies = parse_list(args.strategies, str)
     distances = parse_list(args.distances, float)
     etas = parse_list(args.etas, float)
@@ -205,6 +208,9 @@ def main():
         results: List[Tuple] = []
         if tasks:
             max_workers = min(args.workers, 4)
+            if args.workers > 4:
+                print(f"Capping workers to 4 (requested {args.workers})")
+            print(f"Using effective_workers={max_workers}")
             if max_workers <= 1:
                 for t in tasks:
                     row = run_cell(t)

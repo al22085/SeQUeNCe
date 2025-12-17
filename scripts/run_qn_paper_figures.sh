@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+MODE=${MODE:-smoke} # smoke or prod
+BASE_OUT=${BASE_OUT:-out/qn_paper}
+RUN_NAME=${RUN_NAME:-$(date +%Y%m%d_%H%M%S)}
+
+if [[ "${MODE}" == "smoke" ]]; then
+  PRESET=${PRESET:-preset_non_saturated_smoke}
+  REQUESTED_WORKERS=${WORKERS:-2}
+else
+  PRESET=${PRESET:-preset_hybrid_phase_default}
+  REQUESTED_WORKERS=${WORKERS:-4}
+fi
+
+if [[ "${MODE}" != "smoke" && "${REQUESTED_WORKERS}" -lt 2 ]]; then
+  echo "ERROR: WORKERS must be >=2 for non-smoke runs"
+  exit 1
+fi
+
+EFFECTIVE_WORKERS=${REQUESTED_WORKERS}
+if [[ "${EFFECTIVE_WORKERS}" -gt 4 ]]; then
+  EFFECTIVE_WORKERS=4
+fi
+if [[ "${MODE}" == "smoke" && "${EFFECTIVE_WORKERS}" -lt 2 ]]; then
+  EFFECTIVE_WORKERS=2
+fi
+
+OUT_DIR="${BASE_OUT}/${MODE}_${RUN_NAME}"
+mkdir -p "${OUT_DIR}"
+
+echo "Running phase sweep with PRESET=${PRESET} MODE=${MODE} WORKERS=${EFFECTIVE_WORKERS} OUT_DIR=${OUT_DIR}"
+
+# Phase sweep
+python scripts/qn_phase_sweep.py \
+  --preset "${PRESET}" \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --resume \
+  --out-dir "${OUT_DIR}/phase"
+
+python scripts/plot_qn_phase_sweep.py \
+  --in-agg "${OUT_DIR}/phase/phase_agg.csv" \
+  --out-dir "${OUT_DIR}/phase" \
+  --title "Hybrid distance×eta phase (${MODE})"
+
+# Crossover sensitivity (attn by default)
+python scripts/qn_crossover_sensitivity.py \
+  --preset preset_sensitivity_attn_default \
+  --out-dir "${OUT_DIR}/sensitivity"
+
+python scripts/plot_qn_crossover_sensitivity.py \
+  --in-csv "${OUT_DIR}/sensitivity/crossover_sensitivity.csv" \
+  --out-dir "${OUT_DIR}/sensitivity" \
+  --title "Crossover sensitivity (${MODE})"
+
+# Export summary table
+python scripts/qn_export_summary_table.py \
+  --phase "${OUT_DIR}/phase/phase_crossover.csv" \
+  --sensitivity "${OUT_DIR}/sensitivity/crossover_sensitivity.csv" \
+  --out-dir "${OUT_DIR}"

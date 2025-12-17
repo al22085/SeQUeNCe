@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-from pathlib import Path
-from types import SimpleNamespace
-from typing import List
-
-import numpy as np
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import List
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -19,9 +18,10 @@ if str(ROOT) not in sys.path:
 
 from scripts.qn_phase_sweep import parse_list
 from scripts.plot_qn_phase_sweep import read_agg
+from scripts.qn_experiment_presets import apply_preset
 
 
-def run_phase(args, out_dir: Path, knob_name: str, knob_value: float):
+def run_phase(args, out_dir: Path, knob_name: str, knob_value: float, env: dict):
     cmd = [
         sys.executable,
         "scripts/qn_phase_sweep.py",
@@ -59,10 +59,12 @@ def run_phase(args, out_dir: Path, knob_name: str, knob_value: float):
         str(args.dqt_eta_source),
         "--dqt-eta-dest",
         str(args.dqt_eta_dest),
+        "--workers",
+        str(env.get("WORKERS", 1)),
         "--out-dir",
         str(out_dir),
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=env)
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,19 +88,29 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eta-dest", type=float, default=0.8)
     p.add_argument("--dqt-eta-source", type=float, default=0.8)
     p.add_argument("--dqt-eta-dest", type=float, default=0.8)
+    p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_crossover_sensitivity"))
+    p.add_argument("--workers", type=int, default=4, help="Parallel workers (capped at 4) for inner sweeps.")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    args = apply_preset(args, args.preset)
     values = parse_list(args.values, float)
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     sens_rows = []
     for v in values:
         sweep_dir = out_dir / f"{args.knob}_{v}"
-        run_phase(args, sweep_dir, args.knob, v)
+        # force inner worker cap between 2 and 4 unless user set 1 for tiny sweeps
+        inner_workers = args.workers
+        if inner_workers < 1:
+            inner_workers = 1
+        if inner_workers > 4:
+            inner_workers = 4
+        env = dict(**os.environ, WORKERS=str(inner_workers))
+        run_phase(args, sweep_dir, args.knob, v, env)
         agg_path = sweep_dir / "phase_agg.csv"
         _, bk_map, eqt_map = read_agg(agg_path)
         dists = sorted({d for emap in bk_map.values() for d in emap.keys()})
