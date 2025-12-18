@@ -121,6 +121,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tau-s", type=float, default=0.1)
     p.add_argument("--lambdas", default="1.0,5.0")
     p.add_argument("--target-availability", type=float, default=0.999)
+    p.add_argument("--targets", type=str, default="0.9,0.99,0.999", help="Comma list of target availability levels.")
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--session-key-bits", type=int, default=1024)
@@ -153,11 +154,15 @@ def main():
     lambdas = parse_list(args.lambdas, float)
     kmax_list = parse_list(args.kmax_list, float) if args.kmax_list else [args.kmax_bits]
     seeds = parse_list(args.seeds, int) if args.seeds else [args.seed]
+    targets_arg = args.targets.strip() if args.targets is not None else ""
+    targets = parse_list(targets_arg, float) if targets_arg else []
+    if not targets:
+        targets = [args.target_availability]
     topo = nsfnet_topology()
     edges = [tuple(sorted(e)) for e in nsfnet_edges()]
 
     # enforce worker policy: non-trivial runs need >=2 unless single cell
-    total_cells = len(strategies) * len(lambdas) * len(kmax_list)
+    total_cells = len(strategies) * len(lambdas) * len(kmax_list) * len(targets)
     if total_cells > 1 and args.workers < 2:
         raise ValueError("Workers must be >=2 for non-trivial frontier runs")
 
@@ -171,6 +176,8 @@ def main():
     summary_path = out_dir / "summary.json"
 
     evaluated = set()
+    eval_cache = {}
+    base_eval_cache = {}
     if args.resume and raw_path.exists():
         with raw_path.open() as f:
             reader = csv.DictReader(f)
@@ -181,8 +188,30 @@ def main():
                         row["strategy"],
                         float(row["lambda"]),
                         float(row["kmax"]),
+                        float(row.get("target_A", args.target_availability)),
                         float(row["otp_rate_bps"]),
                     )
+                )
+                key = (
+                    row["scenario"],
+                    row["strategy"],
+                    float(row["lambda"]),
+                    float(row["kmax"]),
+                    float(row.get("target_A", args.target_availability)),
+                    float(row["otp_rate_bps"]),
+                )
+                eval_cache[key] = float(row["availability"])
+                base_key = (
+                    row["scenario"],
+                    row["strategy"],
+                    float(row["lambda"]),
+                    float(row["kmax"]),
+                    float(row["otp_rate_bps"]),
+                )
+                base_eval_cache[base_key] = (
+                    float(row["availability"]),
+                    int(row.get("served", 0)),
+                    int(row.get("total", 0)),
                 )
     raw_headers = [
         "scenario",
@@ -195,6 +224,7 @@ def main():
         "served",
         "total",
         "seeds",
+        "target_A",
     ]
     mode = "a" if (args.resume and raw_path.exists()) else "w"
     f_raw = raw_path.open(mode, newline="")
@@ -202,18 +232,33 @@ def main():
     if mode == "w":
         writer.writerow(raw_headers)
 
-    def cell_seed(strategy: str, lamb: float, kmax: float, seed: int):
-        key = f"{strategy}:{lamb}:{kmax}:{seed}:{args.base_seed}"
+    topo_id = f"nsfnet-{len(edges)}"
+
+    def cell_seed(scenario: str, strategy: str, lamb: float, kmax: float, seed: int):
+        key = f"{scenario}:{strategy}:{lamb}:{kmax}:{seed}:{args.base_seed}:{topo_id}"
         return args.base_seed + int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") % (2**31)
 
-    def evaluate(scenario_name, link_rates, strategy, lamb, kmax, otp_rate):
+    def evaluate(scenario_name, link_rates, strategy, lamb, kmax, otp_rate, target_A):
+        cache_key = (scenario_name, strategy, lamb, kmax, target_A, otp_rate)
+        base_key = (scenario_name, strategy, lamb, kmax, otp_rate)
+        if cache_key in eval_cache:
+            return eval_cache[cache_key]
+        if base_key in base_eval_cache:
+            availability, served_sum, total_sum = base_eval_cache[base_key]
+            if cache_key not in evaluated:
+                writer.writerow(
+                    [scenario_name, strategy, lamb, kmax, otp_rate, availability, 1 - availability, served_sum, total_sum, len(seeds), target_A]
+                )
+                f_raw.flush()
+            eval_cache[cache_key] = availability
+            return availability
         served_sum = 0
         total_sum = 0
         for seed in seeds:
             res = simulate_key_service(
                 topo,
                 strategy=strategy,
-                seed=cell_seed(strategy, lamb, kmax, seed),
+                seed=cell_seed(scenario_name, strategy, lamb, kmax, seed),
                 horizon_s=args.horizon_s,
                 lambda_req=lamb,
                 tau_s=args.tau_s,
@@ -234,8 +279,10 @@ def main():
             total_sum += res["total"]
         availability = served_sum / total_sum if total_sum else 0.0
         block = 1 - availability
-        writer.writerow([scenario_name, strategy, lamb, kmax, otp_rate, availability, block, served_sum, total_sum, len(seeds)])
+        writer.writerow([scenario_name, strategy, lamb, kmax, otp_rate, availability, block, served_sum, total_sum, len(seeds), target_A])
         f_raw.flush()
+        eval_cache[cache_key] = availability
+        base_eval_cache[base_key] = (availability, served_sum, total_sum)
         return availability
 
     tasks = []
@@ -243,7 +290,8 @@ def main():
         for strat in strategies:
             for lamb in lambdas:
                 for kmax in kmax_list:
-                    tasks.append((scenario_name, rates, strat, lamb, kmax))
+                    for target_A in targets:
+                        tasks.append((scenario_name, rates, strat, lamb, kmax, target_A))
 
     max_workers = min(args.workers, 4)
     if args.workers > 4:
@@ -253,32 +301,22 @@ def main():
     frontier_rows = []
 
     def search_task(task):
-        scenario_name, rates, strat, lamb, kmax = task
+        scenario_name, rates, strat, lamb, kmax, target_A = task
         low = args.otp_rate_min_bps
         high = args.otp_rate_max_bps
-        target = args.target_availability
+        target = target_A
 
         # skip if already evaluated high/low
         def eval_rate(r):
-            key = (scenario_name, strat, lamb, kmax, r)
+            key = (scenario_name, strat, lamb, kmax, target_A, r)
+            if key in eval_cache:
+                return eval_cache[key]
             if key in evaluated:
-                return None  # assume already written
-            return evaluate(scenario_name, rates, strat, lamb, kmax, r)
+                return eval_cache.get(key)
+            return evaluate(scenario_name, rates, strat, lamb, kmax, r, target_A)
 
         a_low = eval_rate(low)
-        if a_low is None:
-            a_low = next(
-                float(row["availability"])
-                for row in csv.DictReader(raw_path.open())
-                if row["scenario"] == scenario_name and row["strategy"] == strat and float(row["lambda"]) == lamb and float(row["kmax"]) == kmax and float(row["otp_rate_bps"]) == low
-            )
         a_high = eval_rate(high)
-        if a_high is None:
-            a_high = next(
-                float(row["availability"])
-                for row in csv.DictReader(raw_path.open())
-                if row["scenario"] == scenario_name and row["strategy"] == strat and float(row["lambda"]) == lamb and float(row["kmax"]) == kmax and float(row["otp_rate_bps"]) == high
-            )
 
         frontier = low
         avail_at_frontier = a_low
@@ -293,7 +331,7 @@ def main():
             alo, ahi = a_low, a_high
             while hi - lo > args.rate_tol_bps:
                 mid = (lo + hi) / 2
-                amid = evaluate(scenario_name, rates, strat, lamb, kmax, mid)
+                amid = evaluate(scenario_name, rates, strat, lamb, kmax, mid, target_A)
                 if amid >= target:
                     lo, alo = mid, amid
                 else:
@@ -301,7 +339,7 @@ def main():
             frontier = lo
             avail_at_frontier = alo
         offered = lamb * args.otp_session_duration_s * args.otp_directions * frontier
-        return (scenario_name, strat, lamb, kmax, frontier, avail_at_frontier, offered)
+        return (scenario_name, strat, lamb, kmax, target_A, frontier, avail_at_frontier, offered)
 
     results = []
     if max_workers > 1:
@@ -320,29 +358,30 @@ def main():
     # monotone envelope per (scenario,strategy,kmax)
     grouped = defaultdict(list)
     for r in results:
-        grouped[(r[0], r[1], r[3])].append(r)
+        grouped[(r[0], r[1], r[3], r[4])].append(r)  # scenario,strategy,kmax,target
     mono_rows = []
     for key, vals in grouped.items():
         vals.sort(key=lambda x: x[2])  # by lambda
         prev = None
         for v in vals:
-            raw_frontier = v[4]
+            raw_frontier = v[5]
             if prev is None:
                 mono = raw_frontier
             else:
                 mono = min(raw_frontier, prev)
             prev = mono
+            offered_mono = v[2] * args.otp_session_duration_s * args.otp_directions * mono
             mono_rows.append(
                 [
-                    v[0],
-                    v[1],
-                    v[2],
-                    v[3],
+                    v[0],  # scenario
+                    v[1],  # strategy
+                    v[2],  # lambda
+                    v[3],  # kmax
+                    v[4],  # target_A
                     raw_frontier,
                     mono,
-                    v[5],
-                    v[6],
-                    args.target_availability,
+                    v[6],  # availability_at_frontier
+                    offered_mono,
                 ]
             )
     agg_headers = [
@@ -350,17 +389,18 @@ def main():
         "strategy",
         "lambda",
         "kmax",
+        "target_A",
         "frontier_rate_bps_raw",
         "frontier_rate_bps",
         "availability_at_frontier",
         "offered_load_bps",
-        "target_availability",
     ]
     with agg_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(agg_headers)
         writer.writerows(mono_rows)
     summary = {
+        "targets": targets,
         "target_availability": args.target_availability,
         "otp_directions": args.otp_directions,
         "horizon_s": args.horizon_s,

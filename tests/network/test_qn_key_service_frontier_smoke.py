@@ -24,7 +24,7 @@ def test_key_service_frontier_smoke():
             "3",
             "--binary-search",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]
@@ -34,3 +34,8 @@ def test_key_service_frontier_smoke():
         with agg.open() as f:
             rows = list(csv.DictReader(f))
             assert rows
+            targets = {float(r["target_A"]) for r in rows}
+            assert {0.9, 0.99, 0.999}.issubset(targets)
+            for r in rows:
+                rate = float(r["frontier_rate_bps"])
+                assert 0.0 <= rate <= 2e3 + 1e-6

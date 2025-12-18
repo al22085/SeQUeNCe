@@ -88,7 +88,12 @@ python scripts/qn_key_service_migration_frontier.py \
   --resume \
   --out-dir "${OUT_DIR}/key_service_migration_frontier"
 
-python scripts/plot_qn_key_service_migration_frontier.py \
-  --in-agg "${OUT_DIR}/key_service_migration_frontier/frontier_agg.csv" \
-  --out-dir "${OUT_DIR}/key_service_migration_frontier" \
-  --title "Migration frontier (${MODE})"
+for target in 0.9 0.99 0.999; do
+  TARGET_DIR="${OUT_DIR}/key_service_migration_frontier/A${target}"
+  mkdir -p "${TARGET_DIR}"
+  python scripts/plot_qn_key_service_migration_frontier.py \
+    --in-agg "${OUT_DIR}/key_service_migration_frontier/frontier_agg.csv" \
+    --out-dir "${TARGET_DIR}" \
+    --title "Migration frontier (${MODE})" \
+    --targets "${target}"
+done

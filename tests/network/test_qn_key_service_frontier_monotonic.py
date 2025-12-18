@@ -32,9 +32,12 @@ def test_key_service_frontier_monotonic_lambda():
         agg = out_dir / "frontier_agg.csv"
         with agg.open() as f:
             rows = list(csv.DictReader(f))
-        rates = {}
+        by_target = {}
         for r in rows:
-            if r["strategy"] == "BK":
-                rates[float(r["lambda"])] = float(r["frontier_rate_bps"])
-        # Allow equality or slight inversion due to coarse steps; enforce non-increase with tolerance
-        assert rates[1.0] <= rates[0.5] + 1e-6 or rates[0.5] == 0.0
+            if r["strategy"] != "BK":
+                continue
+            target = float(r["target_A"])
+            by_target.setdefault(target, {})[float(r["lambda"])] = float(r["frontier_rate_bps"])
+        for rates in by_target.values():
+            # Allow equality
+            assert rates[1.0] <= rates[0.5] + 1e-6 or rates[0.5] == 0.0
