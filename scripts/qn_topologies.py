@@ -65,3 +65,15 @@ def load_edge_distances_csv(path: Path):
             d = float(row["distance_m"])
             dist[tuple(sorted((u, v)))] = d
     return dist
+
+
+def load_default_nsfnet_distances() -> dict:
+    default_path = Path(__file__).resolve().parents[1] / "data" / "nsfnet_distances.csv"
+    if default_path.exists():
+        dist = {}
+        with default_path.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                dist[tuple(sorted((row["u"], row["v"])))] = float(row["distance_km"]) * 1000.0
+        return dist
+    return {}

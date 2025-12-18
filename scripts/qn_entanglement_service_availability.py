@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_experiment_presets import apply_preset
-from scripts.qn_topologies import nsfnet_edges, load_edge_distances_csv
+from scripts.qn_topologies import nsfnet_edges, load_edge_distances_csv, load_default_nsfnet_distances
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
 
 
@@ -70,6 +70,8 @@ def main():
     edges = [tuple(sorted((path[i], path[i + 1]))) for i in range(len(path) - 1)]
     edge_params = {}
     dist_map = {}
+    if args.topology == "nsfnet":
+        dist_map = load_default_nsfnet_distances()
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
 

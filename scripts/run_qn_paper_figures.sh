@@ -108,11 +108,18 @@ for target in 0.9 0.99 0.999; do
 done
 
 # Entanglement service availability (discrete-event)
+ENT_DIST_CSV="data/nsfnet_distances.csv"
 python scripts/qn_entanglement_service_availability.py \
   --strategy BK \
+  --topology nsfnet \
+  --edge-distance-csv "${ENT_DIST_CSV}" \
+  --key-bits-per-pair-list "0.5,1.0" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service/BK"
 python scripts/qn_entanglement_service_availability.py \
   --strategy EQT \
+  --topology nsfnet \
+  --edge-distance-csv "${ENT_DIST_CSV}" \
+  --key-bits-per-pair-list "0.5,1.0" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service/EQT"
