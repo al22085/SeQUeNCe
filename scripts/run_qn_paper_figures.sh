@@ -123,3 +123,21 @@ python scripts/qn_entanglement_service_availability.py \
   --key-bits-per-pair-list "0.5,1.0" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service/EQT"
+
+# Entanglement service sweep and frontier (smoke defaults)
+python scripts/qn_entanglement_service_sweep.py \
+  --strategies BK,EQT \
+  --edge-distance-csv "${ENT_DIST_CSV}" \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --out-dir "${OUT_DIR}/entanglement_service_sweep"
+
+python scripts/qn_entanglement_service_frontier.py \
+  --strategies BK,EQT \
+  --edge-distance-csv "${ENT_DIST_CSV}" \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --out-dir "${OUT_DIR}/entanglement_service_frontier"
+
+python scripts/plot_qn_entanglement_service_frontier.py \
+  --in-agg "${OUT_DIR}/entanglement_service_frontier/ent_frontier_agg.csv" \
+  --out-dir "${OUT_DIR}/entanglement_service_frontier" \
+  --title "Entanglement frontier (${MODE})"
