@@ -106,3 +106,13 @@ for target in 0.9 0.99 0.999; do
     --title "Migration frontier (${MODE})" \
     --targets "${target}"
 done
+
+# Entanglement service availability (discrete-event)
+python scripts/qn_entanglement_service_availability.py \
+  --strategy BK \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --out-dir "${OUT_DIR}/entanglement_service/BK"
+python scripts/qn_entanglement_service_availability.py \
+  --strategy EQT \
+  --workers "${EFFECTIVE_WORKERS}" \
+  --out-dir "${OUT_DIR}/entanglement_service/EQT"
