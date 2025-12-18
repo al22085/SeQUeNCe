@@ -182,6 +182,8 @@ def main():
         "availability",
         "served",
         "total",
+        "bits_requested",
+        "bits_delivered",
     ]
     mode = "a" if (args.resume and raw_path.exists()) else "w"
     f_raw = raw_path.open(mode, newline="")
@@ -219,7 +221,7 @@ def main():
             lambda_req=load,
             key_bits_per_pair=kb,
         )
-        return (strat, load, kb, uk, seed, res["availability"], res["served"], res["total"], upgraded)
+        return (strat, load, kb, uk, seed, res["availability"], res["served"], res["total"], upgraded, res["bits_requested"], res["bits_delivered"])
 
     results = []
     max_workers = min(args.workers, 4)

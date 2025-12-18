@@ -64,6 +64,7 @@ def simulate_entanglement_service(
     requests: List[Request] = []
     if num_requests is None and lambda_req is None:
         num_requests = 10
+    total_bits_requested = 0.0
     if lambda_req is None:
         # spread over horizon
         for i in range(num_requests):
@@ -71,6 +72,7 @@ def simulate_entanglement_service(
             deadline = t_arr + tau_s
             bits_needed = otp_data_rate_bps * otp_session_duration_s * otp_directions
             requests.append(Request(t_arrival=t_arr, deadline=deadline, bits_needed=bits_needed))
+            total_bits_requested += bits_needed
     else:
         t = 0.0
         while t < horizon_s:
@@ -80,6 +82,7 @@ def simulate_entanglement_service(
             deadline = t + tau_s
             bits_needed = otp_data_rate_bps * otp_session_duration_s * otp_directions
             requests.append(Request(t_arrival=t, deadline=deadline, bits_needed=bits_needed))
+            total_bits_requested += bits_needed
 
     event_heap: List[Tuple[float, str, object]] = []
 
@@ -181,4 +184,6 @@ def simulate_entanglement_service(
         "ab_pairs": ab_pairs,
         "requests": requests,
         "targets": target_eval,
+        "bits_requested": total_bits_requested,
+        "bits_delivered": sum(r.bits_delivered for r in requests),
     }
