@@ -200,7 +200,11 @@ def main():
                     float(row.get("target_A", args.target_availability)),
                     float(row["otp_rate_bps"]),
                 )
-                eval_cache[key] = float(row["availability"])
+                eval_cache[key] = (
+                    float(row["availability"]),
+                    int(row.get("served", 0)),
+                    int(row.get("total", 0)),
+                )
                 base_key = (
                     row["scenario"],
                     row["strategy"],
@@ -238,85 +242,67 @@ def main():
         key = f"{scenario}:{strategy}:{lamb}:{kmax}:{seed}:{args.base_seed}:{topo_id}"
         return args.base_seed + int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") % (2**31)
 
-    def evaluate(scenario_name, link_rates, strategy, lamb, kmax, otp_rate, target_A):
-        cache_key = (scenario_name, strategy, lamb, kmax, target_A, otp_rate)
-        base_key = (scenario_name, strategy, lamb, kmax, otp_rate)
-        if cache_key in eval_cache:
-            return eval_cache[cache_key]
-        if base_key in base_eval_cache:
-            availability, served_sum, total_sum = base_eval_cache[base_key]
-            if cache_key not in evaluated:
-                writer.writerow(
-                    [scenario_name, strategy, lamb, kmax, otp_rate, availability, 1 - availability, served_sum, total_sum, len(seeds), target_A]
-                )
-                f_raw.flush()
-            eval_cache[cache_key] = availability
-            return availability
-        served_sum = 0
-        total_sum = 0
-        for seed in seeds:
-            res = simulate_key_service(
-                topo,
-                strategy=strategy,
-                seed=cell_seed(scenario_name, strategy, lamb, kmax, seed),
-                horizon_s=args.horizon_s,
-                lambda_req=lamb,
-                tau_s=args.tau_s,
-                crypto_model="otp",
-                otp_data_rate_bps=otp_rate,
-                otp_session_duration_s=args.otp_session_duration_s,
-                session_key_bits=args.session_key_bits,
-                kmax_bits=kmax,
-                base_key_rate_bps=args.base_key_rate_bps,
-                strategy_params=args.strategy_params,
-                routing="shortest",
-                allow_wait=True,
-                reserve_mode="upfront",
-                link_rates=link_rates,
-                otp_directions=args.otp_directions,
-            )
-            served_sum += res["served"]
-            total_sum += res["total"]
-        availability = served_sum / total_sum if total_sum else 0.0
-        block = 1 - availability
-        writer.writerow([scenario_name, strategy, lamb, kmax, otp_rate, availability, block, served_sum, total_sum, len(seeds), target_A])
-        f_raw.flush()
-        eval_cache[cache_key] = availability
-        base_eval_cache[base_key] = (availability, served_sum, total_sum)
-        return availability
-
-    tasks = []
-    for scenario_name, rates in scenarios.items():
-        for strat in strategies:
-            for lamb in lambdas:
-                for kmax in kmax_list:
-                    for target_A in targets:
-                        tasks.append((scenario_name, rates, strat, lamb, kmax, target_A))
-
-    max_workers = min(args.workers, 4)
-    if args.workers > 4:
-        print(f"Capping workers to 4 (requested {args.workers})")
-    print(f"Using effective_workers={max_workers}")
-
-    frontier_rows = []
+    evaluated_keys = set(evaluated)
 
     def search_task(task):
-        scenario_name, rates, strat, lamb, kmax, target_A = task
+        scenario_name, link_rates, strategy, lamb, kmax, target_A = task
+        local_eval = dict(eval_cache)
+        local_base = dict(base_eval_cache)
+        new_rows = []
+
+        def eval_rate(otp_rate):
+            cache_key = (scenario_name, strategy, lamb, kmax, target_A, otp_rate)
+            base_key = (scenario_name, strategy, lamb, kmax, otp_rate)
+            if cache_key in local_eval:
+                return local_eval[cache_key]
+            if base_key in local_base:
+                availability, served_sum, total_sum = local_base[base_key]
+                local_eval[cache_key] = (availability, served_sum, total_sum)
+                # ensure per-target raw row exists even if reused from base cache
+                new_rows.append(
+                    [scenario_name, strategy, lamb, kmax, otp_rate, availability, 1 - availability, served_sum, total_sum, len(seeds), target_A]
+                )
+                return availability, served_sum, total_sum
+            served_sum = 0
+            total_sum = 0
+            for seed in seeds:
+                res = simulate_key_service(
+                    topo,
+                    strategy=strategy,
+                    seed=cell_seed(scenario_name, strategy, lamb, kmax, seed),
+                    horizon_s=args.horizon_s,
+                    lambda_req=lamb,
+                    tau_s=args.tau_s,
+                    crypto_model="otp",
+                    otp_data_rate_bps=otp_rate,
+                    otp_session_duration_s=args.otp_session_duration_s,
+                    session_key_bits=args.session_key_bits,
+                    kmax_bits=kmax,
+                    base_key_rate_bps=args.base_key_rate_bps,
+                    strategy_params=args.strategy_params,
+                    routing="shortest",
+                    allow_wait=True,
+                    reserve_mode="upfront",
+                    link_rates=link_rates,
+                    otp_directions=args.otp_directions,
+                )
+                served_sum += res["served"]
+                total_sum += res["total"]
+            availability = served_sum / total_sum if total_sum else 0.0
+            block = 1 - availability
+            local_eval[cache_key] = (availability, served_sum, total_sum)
+            local_base[base_key] = (availability, served_sum, total_sum)
+            new_rows.append(
+                [scenario_name, strategy, lamb, kmax, otp_rate, availability, block, served_sum, total_sum, len(seeds), target_A]
+            )
+            return availability, served_sum, total_sum
+
         low = args.otp_rate_min_bps
         high = args.otp_rate_max_bps
         target = target_A
 
-        # skip if already evaluated high/low
-        def eval_rate(r):
-            key = (scenario_name, strat, lamb, kmax, target_A, r)
-            if key in eval_cache:
-                return eval_cache[key]
-            if key in evaluated:
-                return eval_cache.get(key)
-            return evaluate(scenario_name, rates, strat, lamb, kmax, r, target_A)
-
-        a_low = eval_rate(low)
-        a_high = eval_rate(high)
+        a_low, _, _ = eval_rate(low)
+        a_high, _, _ = eval_rate(high)
 
         frontier = low
         avail_at_frontier = a_low
@@ -331,7 +317,7 @@ def main():
             alo, ahi = a_low, a_high
             while hi - lo > args.rate_tol_bps:
                 mid = (lo + hi) / 2
-                amid = evaluate(scenario_name, rates, strat, lamb, kmax, mid, target_A)
+                amid, _, _ = eval_rate(mid)
                 if amid >= target:
                     lo, alo = mid, amid
                 else:
@@ -339,21 +325,54 @@ def main():
             frontier = lo
             avail_at_frontier = alo
         offered = lamb * args.otp_session_duration_s * args.otp_directions * frontier
-        return (scenario_name, strat, lamb, kmax, target_A, frontier, avail_at_frontier, offered)
+        return (scenario_name, strategy, lamb, kmax, target_A, frontier, avail_at_frontier, offered), new_rows
+
+    tasks = []
+    for scenario_name, rates in scenarios.items():
+        for strat in strategies:
+            for lamb in lambdas:
+                for kmax in kmax_list:
+                    for target_A in targets:
+                        tasks.append((scenario_name, rates, strat, lamb, kmax, target_A))
+
+    max_workers = min(args.workers, 4)
+    if args.workers > 4:
+        print(f"Capping workers to 4 (requested {args.workers})")
+    print(f"Using effective_workers={max_workers}")
 
     results = []
-    if max_workers > 1:
-        try:
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                fut_map = {ex.submit(search_task, t): t for t in tasks}
-                for fut in as_completed(fut_map):
-                    results.append(fut.result())
-        except PermissionError:
+
+    def write_rows(rows):
+        for row in rows:
+            key = (row[0], row[1], float(row[2]), float(row[3]), float(row[10]), float(row[4]))
+            if key in evaluated_keys:
+                continue
+            writer.writerow(row)
+            f_raw.flush()
+            evaluated_keys.add(key)
+            eval_cache[key] = (float(row[5]), int(row[7]), int(row[8]))
+            base_key = (row[0], row[1], float(row[2]), float(row[3]), float(row[4]))
+            base_eval_cache[base_key] = (float(row[5]), int(row[7]), int(row[8]))
+
+    if tasks:
+        if max_workers > 1:
+            try:
+                with ProcessPoolExecutor(max_workers=max_workers) as ex:
+                    fut_map = {ex.submit(search_task, t): t for t in tasks}
+                    for fut in as_completed(fut_map):
+                        res, rows = fut.result()
+                        write_rows(rows)
+                        results.append(res)
+            except PermissionError:
+                for t in tasks:
+                    res, rows = search_task(t)
+                    write_rows(rows)
+                    results.append(res)
+        else:
             for t in tasks:
-                results.append(search_task(t))
-    else:
-        for t in tasks:
-            results.append(search_task(t))
+                res, rows = search_task(t)
+                write_rows(rows)
+                results.append(res)
 
     # monotone envelope per (scenario,strategy,kmax)
     grouped = defaultdict(list)

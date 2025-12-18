@@ -36,6 +36,13 @@ mkdir -p "${OUT_DIR}"
 
 echo "Running phase sweep with PRESET=${PRESET} MODE=${MODE} WORKERS=${EFFECTIVE_WORKERS} OUT_DIR=${OUT_DIR}"
 
+LINK_RATE_FLAGS=""
+if [[ -n "${QT_RATE_IN:-}" ]]; then
+  RATE_JSON="${OUT_DIR}/link_rates.json"
+  python scripts/qn_build_link_rates_from_qt.py --in "${QT_RATE_IN}" --out-json "${RATE_JSON}"
+  LINK_RATE_FLAGS="--link-rate-json ${RATE_JSON}"
+fi
+
 # Phase sweep
 python scripts/qn_phase_sweep.py \
   --preset "${PRESET}" \
@@ -74,7 +81,8 @@ python scripts/qn_key_service_sweep.py \
   --preset preset_key_service_otp_smoke \
   --workers "${EFFECTIVE_WORKERS}" \
   --resume \
-  --out-dir "${OUT_DIR}/key_service_sweep"
+  --out-dir "${OUT_DIR}/key_service_sweep" \
+  ${LINK_RATE_FLAGS}
 
 python scripts/plot_qn_key_service_sweep.py \
   --in-agg "${OUT_DIR}/key_service_sweep/key_service_sweep_agg.csv" \
@@ -86,7 +94,8 @@ python scripts/qn_key_service_migration_frontier.py \
   --preset preset_non_saturated_smoke \
   --workers "${EFFECTIVE_WORKERS}" \
   --resume \
-  --out-dir "${OUT_DIR}/key_service_migration_frontier"
+  --out-dir "${OUT_DIR}/key_service_migration_frontier" \
+  ${LINK_RATE_FLAGS}
 
 for target in 0.9 0.99 0.999; do
   TARGET_DIR="${OUT_DIR}/key_service_migration_frontier/A${target}"
