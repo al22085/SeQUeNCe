@@ -1,6 +1,8 @@
 import csv
 import math
 from pathlib import Path
+from typing import Iterable, List, Tuple
+from collections import defaultdict, deque
 
 NSFNET_NODES = [
     "1",
@@ -116,3 +118,70 @@ def subdivide_edges(dist_map, segment_length_km: float | None = None, segments_p
         expanded_edges.append((prev, v, seg_len_km * 1000.0, (u, v)))
         mapping[(u, v)].append((prev, v))
     return expanded_edges, mapping, virtual_nodes
+
+
+def edge_usage_counts(topo):
+    counts = defaultdict(int)
+    nodes = list(topo.keys())
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            src, dst = nodes[i], nodes[j]
+            q = deque([[src]])
+            visited = {src}
+            path = None
+            while q:
+                p = q.popleft()
+                n = p[-1]
+                if n == dst:
+                    path = p
+                    break
+                for nei in topo[n]:
+                    if nei not in visited:
+                        visited.add(nei)
+                        q.append(p + [nei])
+            if not path:
+                continue
+            for k in range(len(path) - 1):
+                edge = tuple(sorted((path[k], path[k + 1])))
+                counts[edge] += 1
+    return counts
+
+
+def pick_upgrade_edges(topo, policy: str, k: int) -> List[Tuple[str, str]]:
+    if k <= 0:
+        return []
+    if policy in ("shortestpath_count", "betweenness"):
+        ranked = sorted(edge_usage_counts(topo).items(), key=lambda x: (-x[1], x[0]))
+        return [e for e, _ in ranked[:k]]
+    return []
+
+
+def expanded_nodes(expanded_edges: Iterable[Tuple[str, str, float, Tuple[str, str]]]) -> List[str]:
+    nodes = set()
+    for a, b, *_ in expanded_edges:
+        nodes.add(a)
+        nodes.add(b)
+    return list(nodes)
+
+
+def shortest_path_edges(expanded_edges: List[Tuple[str, str, float, Tuple[str, str]]], src: str, dst: str):
+    """Dijkstra on expanded graph; returns list of (u,v,dist_m,orig_edge) from src to dst."""
+    adj = {}
+    for a, b, dist_m, orig in expanded_edges:
+        adj.setdefault(a, []).append((b, dist_m, orig))
+        adj.setdefault(b, []).append((a, dist_m, orig))
+    import heapq
+
+    pq = [(0.0, src, [])]
+    seen = set()
+    while pq:
+        d, node, path = heapq.heappop(pq)
+        if node in seen:
+            continue
+        seen.add(node)
+        if node == dst:
+            return path
+        for nei, w, orig in adj.get(node, []):
+            if nei not in seen:
+                heapq.heappush(pq, (d + w, nei, path + [(node, nei, w, orig)]))
+    return []

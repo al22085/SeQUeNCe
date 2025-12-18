@@ -38,7 +38,7 @@ def test_phase_sweep_resume_parallel():
             "--fidelity",
             "0.5",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]

@@ -14,6 +14,7 @@ pandas
 tqdm>=4.54.0
 networkx
 pytest
+pytest-xdist
 jupyterlab
 ipywidgets
 gmpy2

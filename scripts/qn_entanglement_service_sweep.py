@@ -23,6 +23,9 @@ from scripts.qn_topologies import (
     load_distance_dataset,
     load_edge_distances_csv,
     subdivide_edges,
+    expanded_nodes,
+    shortest_path_edges,
+    pick_upgrade_edges,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
@@ -30,65 +33,6 @@ from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_en
 
 def parse_list(raw: str, cast=float) -> List:
     return [cast(x) for x in raw.split(",") if x]
-
-
-def edge_usage_counts(topo):
-    from collections import defaultdict, deque
-
-    counts = defaultdict(int)
-    nodes = list(topo.keys())
-    for i in range(len(nodes)):
-        for j in range(i + 1, len(nodes)):
-            src, dst = nodes[i], nodes[j]
-            q = deque([[src]])
-            visited = {src}
-            path = None
-            while q:
-                p = q.popleft()
-                n = p[-1]
-                if n == dst:
-                    path = p
-                    break
-                for nei in topo[n]:
-                    if nei not in visited:
-                        visited.add(nei)
-                        q.append(p + [nei])
-            if not path:
-                continue
-            for k in range(len(path) - 1):
-                edge = tuple(sorted((path[k], path[k + 1])))
-                counts[edge] += 1
-    return counts
-
-
-def pick_upgrade_edges(topo, policy: str, k: int) -> List[Tuple[str, str]]:
-    edges = [tuple(sorted(e)) for e in nsfnet_edges()]
-    if k <= 0:
-        return []
-    if policy == "shortestpath_count":
-        ranked = sorted(edge_usage_counts(topo).items(), key=lambda x: (-x[1], x[0]))
-        return [e for e, _ in ranked[:k]]
-    elif policy == "betweenness":
-        # simple betweenness via shortest-path pair counting (same as above)
-        ranked = sorted(edge_usage_counts(topo).items(), key=lambda x: (-x[1], x[0]))
-        return [e for e, _ in ranked[:k]]
-    return []
-
-
-def make_edge_params(
-    upgraded: List[Tuple[str, str]],
-    eta: float,
-    knobs: StrategyKnobs,
-    dist_map: Dict[Tuple[str, str], float],
-) -> Dict[Tuple[str, str], EdgeParams]:
-    edges = [tuple(sorted(e)) for e in nsfnet_edges()]
-    params = {}
-    for e in edges:
-        dist_km = dist_map.get(e, 1000.0) / 1000.0 if dist_map else 1.0
-        use_strategy = "EQT" if e in upgraded else "BK"
-        p_eg, attempt_rate, coherence, p_bsm_edge, extra_lat = edge_params_for_strategy(use_strategy, dist_km, eta, knobs)
-        params[e] = EdgeParams(attempt_rate, p_eg, coherence, extra_lat)
-    return params
 
 
 def ci95(std: float, n: int) -> float:
@@ -135,6 +79,12 @@ def parse_args():
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
     p.add_argument("--upgrade-mode", choices=["edges", "repeaters"], default="edges")
     p.add_argument("--segment-length-km", type=float, default=50.0)
+    p.add_argument("--pair-mode", choices=["fixed", "random"], default="fixed")
+    p.add_argument("--src-node", type=str, default="1")
+    p.add_argument("--dst-node", type=str, default="14")
+    p.add_argument("--otp-data-rate-bps", type=float, default=1e3)
+    p.add_argument("--otp-session-duration-s", type=float, default=0.01)
+    p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_sweep"))
     p.add_argument("--resume", action="store_true")
@@ -157,10 +107,6 @@ def main():
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
     expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
-    nodes_expanded = set()
-    for a, b, _, _ in expanded_edges:
-        nodes_expanded.add(a)
-        nodes_expanded.add(b)
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
         attempt_rate_sc_hz=args.attempt_rate_sc_hz,
@@ -186,6 +132,8 @@ def main():
         "eta",
         "distance_dataset_id",
         "upgrade_edges",
+        "src",
+        "dst",
         "availability",
         "served",
         "total",
@@ -206,31 +154,24 @@ def main():
                     for seed in seeds:
                         tasks.append((strat, load, kb, uk, seed))
 
-    def shortest_path(nodes, edges, src, dst):
-        adj = {n: [] for n in nodes}
-        for a, b, dist_m, orig in edges:
-            adj.setdefault(a, []).append((b, dist_m, orig))
-            adj.setdefault(b, []).append((a, dist_m, orig))
-        import heapq
-
-        pq = [(0, src, [])]
-        seen = set()
-        while pq:
-            d, node, path = heapq.heappop(pq)
-            if node in seen:
-                continue
-            seen.add(node)
-            if node == dst:
-                return path
-            for nei, w, orig in adj.get(node, []):
-                if nei not in seen:
-                    heapq.heappush(pq, (d + w, nei, path + [(node, nei, w, orig)]))
-        return []
+    def choose_pair(seed: int):
+        if args.pair_mode == "fixed":
+            return args.src_node, args.dst_node
+        rng = np.random.default_rng(seed)
+        candidates = sorted(set(expanded_nodes(expanded_edges)))
+        if len(candidates) < 2:
+            return args.src_node, args.dst_node
+        src_idx = rng.integers(0, len(candidates))
+        dst_idx = rng.integers(0, len(candidates) - 1)
+        if dst_idx >= src_idx:
+            dst_idx += 1
+        return candidates[src_idx], candidates[dst_idx]
 
     def run_task(task):
         strat, load, kb, uk, seed = task
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
-        path_edges = shortest_path(nodes_expanded, expanded_edges, "1", "14")
+        src, dst = choose_pair(seed)
+        path_edges = shortest_path_edges(expanded_edges, src, dst)
         edge_params = {}
         for a, b, dist_m, orig in path_edges:
             dist_km = dist_m / 1000.0
@@ -251,27 +192,32 @@ def main():
             if not chain_path:
                 chain_path.append(a)
             chain_path.append(b)
-        res = simulate_entanglement_service(
-            path=chain_path,
-            edge_params=edge_params,
-            swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
-            seed=seed,
-            horizon_s=args.horizon_s,
-            tau_s=args.tau_s,
-            num_requests=args.num_requests,
-            lambda_req=load,
-            key_bits_per_pair=kb,
-        )
+            res = simulate_entanglement_service(
+                path=chain_path,
+                edge_params=edge_params,
+                swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
+                seed=seed,
+                horizon_s=args.horizon_s,
+                tau_s=args.tau_s,
+                num_requests=args.num_requests,
+                lambda_req=load,
+                key_bits_per_pair=kb,
+                otp_data_rate_bps=args.otp_data_rate_bps,
+                otp_session_duration_s=args.otp_session_duration_s,
+                otp_directions=args.otp_directions,
+            )
         return (
             strat,
             load,
             kb,
             uk,
             seed,
+            upgraded,
+            src,
+            dst,
             res["availability"],
             res["served"],
             res["total"],
-            upgraded,
             res["bits_requested"],
             res["bits_delivered"],
         )
@@ -296,10 +242,14 @@ def main():
                             row[3],
                             args.eta,
                             args.distance_dataset_id,
-                            ";".join("-".join(e) for e in sorted(row[8])),
-                            row[5],
+                            ";".join("-".join(e) for e in sorted(row[5])),
                             row[6],
                             row[7],
+                            row[8],
+                            row[9],
+                            row[10],
+                            row[11],
+                            row[12],
                         ]
                     )
                     f_raw.flush()
@@ -316,10 +266,14 @@ def main():
                         row[3],
                         args.eta,
                         args.distance_dataset_id,
-                        ";".join("-".join(e) for e in sorted(row[8])),
-                        row[5],
+                        ";".join("-".join(e) for e in sorted(row[5])),
                         row[6],
                         row[7],
+                        row[8],
+                        row[9],
+                        row[10],
+                        row[11],
+                        row[12],
                     ]
                 )
                 f_raw.flush()
@@ -336,10 +290,14 @@ def main():
                     row[3],
                     args.eta,
                     args.distance_dataset_id,
-                    ";".join("-".join(e) for e in sorted(row[8])),
-                    row[5],
+                    ";".join("-".join(e) for e in sorted(row[5])),
                     row[6],
                     row[7],
+                    row[8],
+                    row[9],
+                    row[10],
+                    row[11],
+                    row[12],
                 ]
             )
             f_raw.flush()
@@ -349,7 +307,7 @@ def main():
     agg = defaultdict(list)
     for r in results:
         key = (r[0], r[1], r[2], r[3])
-        agg[key].append(r[5])
+        agg[key].append(r[8])
     agg_headers = [
         "strategy",
         "lambda",

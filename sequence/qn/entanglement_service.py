@@ -86,11 +86,16 @@ def simulate_entanglement_service(
 
     event_heap: List[Tuple[float, str, object]] = []
 
-    # schedule initial EG attempts
+    # schedule initial entanglement successes using Poisson thinning:
+    # attempts ~ Poisson(R), success prob p_eg => successes ~ Poisson(R*p_eg) (exact).
     for e in edges:
         edge = edge_params[e]
-        t = _sample_exp(rng, edge.attempt_rate_hz)
-        heapq.heappush(event_heap, (t, "eg_attempt", e))
+        rate_succ = edge.attempt_rate_hz * edge.p_eg
+        if rate_succ <= 0:
+            continue
+        t = _sample_exp(rng, rate_succ)
+        if t <= horizon_s + tau_s:
+            heapq.heappush(event_heap, (t, "eg_success", e))
 
     # schedule request arrivals
     for req in requests:
@@ -154,18 +159,18 @@ def simulate_entanglement_service(
         now = t
         if now > horizon_s + tau_s:
             break
-        if kind == "eg_attempt":
+        if kind == "eg_success":
             edge = payload
-        params = edge_params[edge]
-        # schedule next attempt
-        next_t = now + _sample_exp(rng, params.attempt_rate_hz)
-        if next_t <= horizon_s + tau_s:
-            heapq.heappush(event_heap, (next_t, "eg_attempt", edge))
-            if rng.random() < params.p_eg:
-                available_t = now + params.extra_latency_s
-                edge_pairs[edge].append(available_t + params.coherence_time_s)
-                edge_pairs[edge].sort()
-                try_swap(available_t + swap_params.latency_s)
+            params = edge_params[edge]
+            rate_succ = params.attempt_rate_hz * params.p_eg
+            if rate_succ > 0:
+                next_t = now + _sample_exp(rng, rate_succ)
+                if next_t <= horizon_s + tau_s:
+                    heapq.heappush(event_heap, (next_t, "eg_success", edge))
+            available_t = now + params.extra_latency_s
+            edge_pairs[edge].append(available_t + params.coherence_time_s)
+            edge_pairs[edge].sort()
+            try_swap(available_t + swap_params.latency_s)
         elif kind == "req":
             req = payload
             pending.append(req)

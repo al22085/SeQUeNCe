@@ -22,9 +22,11 @@ from scripts.qn_topologies import (
     load_distance_dataset,
     load_edge_distances_csv,
     subdivide_edges,
+    expanded_nodes,
+    shortest_path_edges,
+    pick_upgrade_edges,
 )
 from scripts.qn_entanglement_service_sweep import (
-    pick_upgrade_edges,
     ci95,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
@@ -44,6 +46,7 @@ def parse_args():
     p.add_argument("--load-min", type=float, default=0.1)
     p.add_argument("--load-max", type=float, default=5.0)
     p.add_argument("--load-tol", type=float, default=0.1)
+    p.add_argument("--load-grid", type=str, default="", help="Optional comma list to use grid search instead of binary.")
     p.add_argument("--seeds", default="0,1")
     p.add_argument("--num-requests", type=int, default=40)
     p.add_argument("--horizon-s", type=float, default=0.3)
@@ -76,6 +79,12 @@ def parse_args():
     p.add_argument("--upgrade-k-list", type=str, default="0")
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
     p.add_argument("--upgrade-mode", choices=["edges", "repeaters"], default="edges")
+    p.add_argument("--pair-mode", choices=["fixed", "random"], default="fixed")
+    p.add_argument("--src-node", type=str, default="1")
+    p.add_argument("--dst-node", type=str, default="14")
+    p.add_argument("--otp-data-rate-bps", type=float, default=1e3)
+    p.add_argument("--otp-session-duration-s", type=float, default=0.01)
+    p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_frontier"))
     p.add_argument("--resume", action="store_true")
@@ -88,6 +97,7 @@ def main():
     targets = parse_list(args.targets, float)
     kbits_list = parse_list(args.kbits_list, float)
     seeds = parse_list(args.seeds, int)
+    load_grid = parse_list(args.load_grid, float) if args.load_grid else None
     upgrade_k_list = parse_list(args.upgrade_k_list, int)
     if args.upgrade_mode != "edges":
         raise SystemExit("upgrade-mode repeaters not implemented; use edges")
@@ -97,6 +107,7 @@ def main():
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
     expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
+    nodes_list = expanded_nodes(expanded_edges)
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
         attempt_rate_sc_hz=args.attempt_rate_sc_hz,
@@ -121,6 +132,8 @@ def main():
         "eta",
         "distance_dataset_id",
         "upgrade_edges",
+        "src_nodes",
+        "dst_nodes",
         "load",
         "availability_mean",
         "availability_std",
@@ -132,58 +145,72 @@ def main():
     if mode == "w":
         writer.writerow(raw_headers)
 
-    def shortest_path(nodes, edges, src, dst):
-        adj = {n: [] for n in nodes}
-        for a, b, dist_m, orig in edges:
-            adj.setdefault(a, []).append((b, dist_m, orig))
-            adj.setdefault(b, []).append((a, dist_m, orig))
-        import heapq
+    avail_cache = {}
 
-        pq = [(0, src, [])]
-        seen = set()
-        while pq:
-            d, node, path = heapq.heappop(pq)
-            if node in seen:
-                continue
-            seen.add(node)
-            if node == dst:
-                return path
-            for nei, w, orig in adj.get(node, []):
-                if nei not in seen:
-                    heapq.heappush(pq, (d + w, nei, path + [(node, nei, w, orig)]))
-        return []
-
-    nodes_expanded = set()
-    for u, v, _, _ in expanded_edges:
-        nodes_expanded.add(u)
-        nodes_expanded.add(v)
+    def choose_pair(seed: int):
+        if args.pair_mode == "fixed":
+            return args.src_node, args.dst_node
+        rng = np.random.default_rng(seed)
+        if len(nodes_list) < 2:
+            return args.src_node, args.dst_node
+        src_idx = rng.integers(0, len(nodes_list))
+        dst_idx = rng.integers(0, len(nodes_list) - 1)
+        if dst_idx >= src_idx:
+            dst_idx += 1
+        return nodes_list[src_idx], nodes_list[dst_idx]
 
     def eval_load(strategy, load, kb, uk, target_val):
+        cache_key = (strategy, load, kb, uk)
+        cached = avail_cache.get(cache_key)
+        if cached is not None:
+            mean, std, src_field, dst_field = cached
+            writer.writerow(
+                [
+                    strategy,
+                    target_val,
+                    kb,
+                    uk,
+                    args.eta,
+                    args.distance_dataset_id,
+                    ";".join("-".join(e) for e in sorted(pick_upgrade_edges(topo, args.upgrade_policy, uk))),
+                    src_field,
+                    dst_field,
+                    load,
+                    mean,
+                    std,
+                    len(seeds),
+                ]
+            )
+            f_raw.flush()
+            return mean, std
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
-        path_edges = shortest_path(nodes_expanded, expanded_edges, "1", "14")
+        src_list = []
+        dst_list = []
         edge_params = {}
-        for a, b, dist_m, orig in path_edges:
-            dist_km = dist_m / 1000.0
-            use_strat = strategy
-            if strategy == "BK":
-                use_strat = "BK"
-            else:
-                use_strat = "EQT" if orig in upgraded else "BK"
-            p_eg, attempt_rate, coherence, p_bsm_seg, extra_lat = edge_params_for_strategy(use_strat, dist_km, args.eta, knobs)
-            edge_params[tuple(sorted((a, b)))] = EdgeParams(attempt_rate, p_eg, coherence, extra_lat)
+        paths = []
+        for seed in seeds:
+            src, dst = choose_pair(seed)
+            src_list.append(src)
+            dst_list.append(dst)
+            path_edges = shortest_path_edges(expanded_edges, src, dst)
+            paths.append((seed, src, dst, path_edges))
 
-        if strategy == "BK":
-            p_bsm, swap_lat = swap_params_for_strategy("BK", knobs)
-        else:
-            p_bsm, swap_lat = swap_params_for_strategy("EQT", knobs)
-        chain_path = []
-        for a, b, _, _ in path_edges:
-            if not chain_path:
-                chain_path.append(a)
-            chain_path.append(b)
         p_bsm, swap_lat = swap_params_for_strategy(strategy, knobs)
         avails = []
-        for seed in seeds:
+        for seed, src, dst, path_edges in paths:
+            edge_params = {}
+            for a, b, dist_m, orig in path_edges:
+                dist_km = dist_m / 1000.0
+                use_strat = strategy if (strategy == "BK" or orig in upgraded) else "BK"
+                p_eg, attempt_rate, coherence, p_bsm_seg, extra_lat = edge_params_for_strategy(
+                    use_strat, dist_km, args.eta, knobs
+                )
+                edge_params[tuple(sorted((a, b)))] = EdgeParams(attempt_rate, p_eg, coherence, extra_lat)
+            chain_path = []
+            for a, b, _, _ in path_edges:
+                if not chain_path:
+                    chain_path.append(a)
+                chain_path.append(b)
             res = simulate_entanglement_service(
                 path=chain_path,
                 edge_params=edge_params,
@@ -194,10 +221,15 @@ def main():
                 num_requests=args.num_requests,
                 lambda_req=load,
                 key_bits_per_pair=kb,
+                otp_data_rate_bps=args.otp_data_rate_bps,
+                otp_session_duration_s=args.otp_session_duration_s,
+                otp_directions=args.otp_directions,
             )
             avails.append(res["availability"])
         mean = float(np.mean(avails)) if avails else 0.0
         std = float(np.std(avails, ddof=0)) if avails else 0.0
+        src_field = ";".join(sorted(set(src_list))) if src_list else ""
+        dst_field = ";".join(sorted(set(dst_list))) if dst_list else ""
         writer.writerow(
             [
                 strategy,
@@ -207,6 +239,8 @@ def main():
                 args.eta,
                 args.distance_dataset_id,
                 ";".join("-".join(e) for e in sorted(upgraded)),
+                src_field,
+                dst_field,
                 load,
                 mean,
                 std,
@@ -214,9 +248,23 @@ def main():
             ]
         )
         f_raw.flush()
+        avail_cache[cache_key] = (mean, std, src_field, dst_field)
         return mean, std
 
     def frontier_for(strategy, target, kb, uk):
+        if load_grid:
+            best_load = None
+            best_avail = 0.0
+            evals = 0
+            for load in sorted(load_grid):
+                avail, _ = eval_load(strategy, load, kb, uk, target)
+                evals += 1
+                if avail >= target and (best_load is None or load > best_load):
+                    best_load = load
+                    best_avail = avail
+            if best_load is None:
+                return args.load_min, best_avail, evals
+            return best_load, best_avail, evals
         lo, hi = args.load_min, args.load_max
         alo, _ = eval_load(strategy, lo, kb, uk, target)
         ahi, _ = eval_load(strategy, hi, kb, uk, target)

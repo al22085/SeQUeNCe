@@ -23,7 +23,7 @@ def test_key_service_monotonic_lambda():
             "--tau-s",
             "0.05",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]

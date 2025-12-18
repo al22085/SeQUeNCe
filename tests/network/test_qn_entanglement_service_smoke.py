@@ -21,7 +21,7 @@ def test_entanglement_service_smoke_chain():
             "--tau-s",
             "0.02",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]

@@ -23,7 +23,7 @@ def test_entanglement_service_sweep_smoke():
             "--tau-s",
             "0.02",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]

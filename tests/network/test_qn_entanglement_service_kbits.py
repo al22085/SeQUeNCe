@@ -23,7 +23,7 @@ def test_entanglement_service_kbits_dual_outputs():
             "--key-bits-per-pair-list",
             "0.5,1.0",
             "--workers",
-            "1",
+            "2",
             "--out-dir",
             str(out_dir),
         ]

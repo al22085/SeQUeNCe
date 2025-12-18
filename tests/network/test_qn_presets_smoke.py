@@ -12,7 +12,7 @@ def test_presets_and_cli_smoke():
             "--preset",
             "preset_non_saturated_smoke",
             "--workers",
-            "1",
+            "2",
             "--strategies",
             "BK",
             "--distances",

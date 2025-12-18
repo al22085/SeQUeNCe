@@ -24,7 +24,7 @@ def test_entanglement_service_determinism():
             "--seed",
             "42",
             "--workers",
-            "1",
+            "2",
         ]
         subprocess.run(base_cmd + ["--out-dir", str(out_dir1)], check=True, cwd=Path(__file__).resolve().parents[2])
         subprocess.run(base_cmd + ["--out-dir", str(out_dir2)], check=True, cwd=Path(__file__).resolve().parents[2])
