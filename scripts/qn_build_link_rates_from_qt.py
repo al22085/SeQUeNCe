@@ -1,4 +1,10 @@
-"""Build per-link key-generation rate maps from QT outputs."""
+"""Build per-link key-generation rate maps from QT outputs.
+
+Semantics:
+- Expects a QT output file (CSV/JSON) that contains a probability column (`--prob-column`, default: availability_mean).
+- If edge columns are provided (`--edge-u-column`/`--edge-v-column`), the probability is treated as per-edge success probability and mapped directly to that edge.
+- If no edge columns are provided, the probability is interpreted as a path-/scenario-level success metric (e.g., end-to-end availability); the adapter applies a uniform rate across all NSFNET edges (or upgraded edges if specified). This is a heuristic; supply per-edge probabilities for accuracy.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +25,14 @@ from scripts.qn_topologies import nsfnet_edges, nsfnet_topology
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build link-rate map from QT outputs.")
     p.add_argument("--in", dest="in_path", type=Path, required=True, help="QT output file (CSV or JSON).")
-    p.add_argument("--prob-column", type=str, default="success_prob", help="Column/key containing success probability.")
+    p.add_argument(
+        "--prob-column",
+        type=str,
+        default="availability_mean",
+        help="Column/key containing per-attempt success probability (default aligns with phase_agg availability_mean).",
+    )
+    p.add_argument("--edge-u-column", type=str, default="", help="If provided with edge-v-column, treat rows as per-edge entries.")
+    p.add_argument("--edge-v-column", type=str, default="", help="If provided with edge-u-column, treat rows as per-edge entries.")
     p.add_argument("--strategy", type=str, default="", help="Optional strategy filter for multi-strategy inputs.")
     p.add_argument("--attempt-rate-hz", type=float, default=1e6)
     p.add_argument("--key-bits-per-success", type=float, default=1.0)
@@ -33,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_probabilities(args: argparse.Namespace) -> float:
+def load_rows(args: argparse.Namespace):
     path = args.in_path
     if not path.exists():
         raise FileNotFoundError(path)
@@ -43,17 +56,7 @@ def load_probabilities(args: argparse.Namespace) -> float:
     else:
         with path.open() as f:
             rows = list(csv.DictReader(f))
-    probs = []
-    for row in rows:
-        if args.strategy and str(row.get("strategy", "")).upper() != args.strategy.upper():
-            continue
-        try:
-            probs.append(float(row[args.prob_column]))
-        except Exception:
-            continue
-    if not probs:
-        raise ValueError("No probabilities parsed; check --prob-column/--strategy.")
-    return sum(probs) / len(probs)
+    return rows
 
 
 def edge_usage_counts(topo) -> Dict[Tuple[str, str], int]:
@@ -87,11 +90,47 @@ def edge_usage_counts(topo) -> Dict[Tuple[str, str], int]:
 
 def main():
     args = parse_args()
-    prob = load_probabilities(args)
-    rate = args.attempt_rate_hz * prob * args.key_bits_per_success
+    rows = load_rows(args)
     topo = nsfnet_topology() if args.topology == "nsfnet" else {}
     edges = [tuple(sorted(e)) for e in nsfnet_edges()] if args.topology == "nsfnet" else []
-    rates = {e: rate for e in edges}
+
+    edge_mode = bool(args.edge_u_column and args.edge_v_column)
+    probs_map: Dict[Tuple[str, str], float] = {}
+    probs_list = []
+    for row in rows:
+        if args.strategy and str(row.get("strategy", "")).upper() != args.strategy.upper():
+            continue
+        try:
+            p = float(row[args.prob_column])
+        except Exception:
+            continue
+        if edge_mode:
+            try:
+                u = str(row[args.edge_u_column])
+                v = str(row[args.edge_v_column])
+            except Exception:
+                continue
+            key = tuple(sorted((u, v)))
+            probs_map[key] = p
+        else:
+            probs_list.append(p)
+
+    if edge_mode and not probs_map:
+        raise ValueError("No per-edge probabilities parsed; check --edge-u-column/--edge-v-column and --prob-column.")
+    if not edge_mode and not probs_list:
+        raise ValueError("No probabilities parsed; check --prob-column/--strategy.")
+
+    rates: Dict[Tuple[str, str], float] = {}
+    if edge_mode:
+        for e in edges:
+            prob = probs_map.get(e)
+            if prob is None:
+                continue
+            rates[e] = args.attempt_rate_hz * prob * args.key_bits_per_success
+    else:
+        prob = sum(probs_list) / len(probs_list)
+        rate = args.attempt_rate_hz * prob * args.key_bits_per_success
+        rates = {e: rate for e in edges}
 
     upgrade_edges = []
     if args.upgrade_topk > 0:
@@ -114,7 +153,8 @@ def main():
                     rates[e] *= args.upgrade_mult
 
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    args.out_json.write_text(json.dumps({f"{a}-{b}": v for (a, b), v in rates.items()}, indent=2))
+    out_map = {f"{a}-{b}": v for (a, b), v in sorted(rates.items())}
+    args.out_json.write_text(json.dumps(out_map, indent=2))
     if args.out_csv:
         args.out_csv.parent.mkdir(parents=True, exist_ok=True)
         with args.out_csv.open("w", newline="") as f:

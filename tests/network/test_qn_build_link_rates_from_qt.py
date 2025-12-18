@@ -8,7 +8,7 @@ def test_build_link_rates_from_qt_smoke():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         qt_csv = tmp / "qt.csv"
-        qt_csv.write_text("strategy,success_prob\nBK,0.5\nBK,0.7\n")
+        qt_csv.write_text("strategy,u,v,success_prob\nBK,1,2,0.5\nBK,2,3,0.7\n")
         out_json = tmp / "rates.json"
         cmd = [
             "python",
@@ -17,6 +17,10 @@ def test_build_link_rates_from_qt_smoke():
             str(qt_csv),
             "--prob-column",
             "success_prob",
+            "--edge-u-column",
+            "u",
+            "--edge-v-column",
+            "v",
             "--attempt-rate-hz",
             "100",
             "--key-bits-per-success",
@@ -26,8 +30,7 @@ def test_build_link_rates_from_qt_smoke():
         ]
         subprocess.run(cmd, check=True, cwd=Path(__file__).resolve().parents[2])
         data = json.loads(out_json.read_text())
-        # Mean prob = 0.6 -> rate = 100 * 0.6 * 2 = 120
+        # Edge 1-2 prob 0.5 -> rate 100*0.5*2=100; Edge 2-3 prob 0.7 -> 140
         assert data
-        # Ensure at least one edge present with expected rate
-        rate_values = list(data.values())
-        assert abs(rate_values[0] - 120.0) < 1e-6
+        assert abs(data["1-2"] - 100.0) < 1e-6
+        assert abs(data["2-3"] - 140.0) < 1e-6

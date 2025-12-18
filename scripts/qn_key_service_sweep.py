@@ -130,70 +130,91 @@ def main():
                         continue
                     tasks.append(key)
 
+    def run_cell(key):
+        strat, lamb, kmax, seed = key
+        res = simulate_key_service(
+            topo,
+            strategy=strat,
+            seed=cell_seed(strat, lamb, kmax, seed),
+            horizon_s=args.horizon_s,
+            lambda_req=lamb,
+            tau_s=args.tau_s,
+            crypto_model=args.crypto_model,
+            otp_data_rate_bps=args.otp_data_rate_bps,
+            otp_session_duration_s=args.otp_session_duration_s,
+            session_key_bits=args.session_key_bits,
+            kmax_bits=kmax,
+            base_key_rate_bps=args.base_key_rate_bps,
+            strategy_params=args.strategy_params,
+            routing=args.routing,
+            allow_wait=args.allow_wait,
+            reserve_mode=args.reserve_mode,
+            link_rates=link_rates,
+            otp_directions=args.otp_directions,
+        )
+        return (
+            strat,
+            lamb,
+            kmax,
+            seed,
+            res["availability"],
+            res["block_prob"],
+            res["served"],
+            res["total"],
+            res["mean_wait"],
+            res["mean_hops"],
+        )
+
+    results = []
+    if tasks:
+        max_workers = min(args.workers, 4)
+        if args.workers > 4:
+            print(f"Capping workers to 4 (requested {args.workers})")
+        print(f"Using effective_workers={max_workers}")
+        if max_workers > 1:
+            with ProcessPoolExecutor(max_workers=max_workers) as ex:
+                future_map = {ex.submit(run_cell, t): t for t in tasks}
+                for fut in as_completed(future_map):
+                    results.append(fut.result())
+        else:
+            for t in tasks:
+                results.append(run_cell(t))
+
     mode = "a" if (args.resume and raw_path.exists()) else "w"
     with raw_path.open(mode, newline="") as f_raw:
         writer = csv.writer(f_raw)
         if mode == "w":
             writer.writerow(raw_headers)
-
-        def run_cell(key):
-            strat, lamb, kmax, seed = key
-            res = simulate_key_service(
-                topo,
-                strategy=strat,
-                seed=cell_seed(strat, lamb, kmax, seed),
-                horizon_s=args.horizon_s,
-                lambda_req=lamb,
-                tau_s=args.tau_s,
-                crypto_model=args.crypto_model,
-                otp_data_rate_bps=args.otp_data_rate_bps,
-                otp_session_duration_s=args.otp_session_duration_s,
-                session_key_bits=args.session_key_bits,
-                kmax_bits=kmax,
-                base_key_rate_bps=args.base_key_rate_bps,
-                strategy_params=args.strategy_params,
-                routing=args.routing,
-                allow_wait=args.allow_wait,
-                reserve_mode=args.reserve_mode,
-                link_rates=link_rates,
-                otp_directions=args.otp_directions,
-            )
-            return (
-                strat,
-                lamb,
-                kmax,
-                seed,
-                res["availability"],
-                res["block_prob"],
-                res["served"],
-                res["total"],
-                res["mean_wait"],
-                res["mean_hops"],
-            )
-
-        results = []
-        if tasks:
-            max_workers = min(args.workers, 4)
-            if args.workers > 4:
-                print(f"Capping workers to 4 (requested {args.workers})")
-            print(f"Using effective_workers={max_workers}")
-            if max_workers <= 1:
-                for t in tasks:
-                    row = run_cell(t)
-                    writer.writerow(row)
-                    f_raw.flush()
-                    results.append(row)
-            else:
-                with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                    future_map = {ex.submit(run_cell, t): t for t in tasks}
-                    for fut in as_completed(future_map):
-                        row = fut.result()
-                        writer.writerow(row)
-                        f_raw.flush()
-                        results.append(row)
+        for row in results:
+            writer.writerow(row)
+        f_raw.flush()
 
     agg = defaultdict(list)
-    for r in results:
+    all_rows = []
+    if raw_path.exists():
+        with raw_path.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    mw = float(row["mean_wait"]) if row.get("mean_wait") not in ("", None) else 0.0
+                    mh = float(row["mean_hops"]) if row.get("mean_hops") not in ("", None) else 0.0
+                except Exception:
+                    mw, mh = 0.0, 0.0
+                all_rows.append(
+                    (
+                        row["strategy"],
+                        float(row["lambda"]),
+                        float(row["kmax"]),
+                        int(row["seed"]),
+                        float(row["availability"]),
+                        float(row["block_prob"]),
+                        int(row["served"]),
+                        int(row["total"]),
+                        mw,
+                        mh,
+                    )
+                )
+    for r in all_rows:
         key = (r[0], r[1], r[2])
         agg[key].append(r)
 
