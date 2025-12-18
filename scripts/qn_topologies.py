@@ -62,7 +62,12 @@ def load_edge_distances_csv(path: Path):
         reader = csv.DictReader(f)
         for row in reader:
             u, v = row["u"], row["v"]
-            d = float(row["distance_m"])
+            if "distance_m" in row:
+                d = float(row["distance_m"])
+            elif "distance_km" in row:
+                d = float(row["distance_km"]) * 1000.0
+            else:
+                raise KeyError("distance_m or distance_km column required")
             dist[tuple(sorted((u, v)))] = d
     return dist
 
