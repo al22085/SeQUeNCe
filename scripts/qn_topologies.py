@@ -1,4 +1,5 @@
 import csv
+import math
 from pathlib import Path
 
 NSFNET_NODES = [
@@ -87,3 +88,31 @@ def load_distance_dataset(dataset_id: str):
             for row in reader:
                 dist[tuple(sorted((row["u"], row["v"])))] = float(row["distance_km"]) * 1000.0
     return dist
+
+
+def subdivide_edges(dist_map, segment_length_km: float | None = None, segments_per_edge: int | None = None):
+    """Subdivide each edge into shorter segments with virtual nodes."""
+    if segment_length_km is None and segments_per_edge is None:
+        segment_length_km = 50.0
+    expanded_edges = []
+    mapping = {}
+    virtual_nodes = set()
+    for (u, v), dist_m in dist_map.items():
+        dist_km = dist_m / 1000.0
+        if segments_per_edge:
+            segs = max(1, segments_per_edge)
+        else:
+            segs = max(1, int(math.ceil(dist_km / segment_length_km)))
+        seg_len_km = dist_km / segs
+        prev = u
+        mapping[(u, v)] = []
+        for i in range(segs - 1):
+            node = f"{u}-{v}-seg{i}"
+            virtual_nodes.add(node)
+            nxt = node
+            expanded_edges.append((prev, nxt, seg_len_km * 1000.0, (u, v)))
+            mapping[(u, v)].append((prev, nxt))
+            prev = nxt
+        expanded_edges.append((prev, v, seg_len_km * 1000.0, (u, v)))
+        mapping[(u, v)].append((prev, v))
+    return expanded_edges, mapping, virtual_nodes

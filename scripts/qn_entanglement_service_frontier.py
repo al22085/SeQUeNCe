@@ -21,13 +21,14 @@ from scripts.qn_topologies import (
     nsfnet_edges,
     load_distance_dataset,
     load_edge_distances_csv,
+    subdivide_edges,
 )
 from scripts.qn_entanglement_service_sweep import (
     pick_upgrade_edges,
-    make_edge_params,
     ci95,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
+from sequence.qn.entanglement_service import EdgeParams
 from sequence.qn.entanglement_service import SwapParams, simulate_entanglement_service
 
 
@@ -59,8 +60,8 @@ def parse_args():
     p.add_argument("--p-bsm-sc", type=float, default=0.95)
     p.add_argument("--coherence-opt-s", type=float, default=0.02)
     p.add_argument("--coherence-sc-s", type=float, default=0.03)
-    p.add_argument("--attempt-rate-opt-hz", type=float, default=1e5)
-    p.add_argument("--attempt-rate-sc-hz", type=float, default=1e5)
+    p.add_argument("--attempt-rate-opt-hz", type=float, default=1e3)
+    p.add_argument("--attempt-rate-sc-hz", type=float, default=1e3)
     p.add_argument("--transduction-latency-s", type=float, default=0.0)
     p.add_argument("--swap-latency-s", type=float, default=0.0)
     p.add_argument("--edge-distance-csv", type=Path, default=None)
@@ -71,6 +72,7 @@ def parse_args():
         default="sndlib_great_circle_heuristic",
         help="Distance dataset id (sndlib_great_circle_heuristic | topologybench_nsfnet13)",
     )
+    p.add_argument("--segment-length-km", type=float, default=50.0, help="Max segment length when subdividing edges.")
     p.add_argument("--upgrade-k-list", type=str, default="0")
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
     p.add_argument("--upgrade-mode", choices=["edges", "repeaters"], default="edges")
@@ -94,6 +96,7 @@ def main():
     dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
+    expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
         attempt_rate_sc_hz=args.attempt_rate_sc_hz,
@@ -129,25 +132,61 @@ def main():
     if mode == "w":
         writer.writerow(raw_headers)
 
+    def shortest_path(nodes, edges, src, dst):
+        adj = {n: [] for n in nodes}
+        for a, b, dist_m, orig in edges:
+            adj.setdefault(a, []).append((b, dist_m, orig))
+            adj.setdefault(b, []).append((a, dist_m, orig))
+        import heapq
+
+        pq = [(0, src, [])]
+        seen = set()
+        while pq:
+            d, node, path = heapq.heappop(pq)
+            if node in seen:
+                continue
+            seen.add(node)
+            if node == dst:
+                return path
+            for nei, w, orig in adj.get(node, []):
+                if nei not in seen:
+                    heapq.heappush(pq, (d + w, nei, path + [(node, nei, w, orig)]))
+        return []
+
+    nodes_expanded = set()
+    for u, v, _, _ in expanded_edges:
+        nodes_expanded.add(u)
+        nodes_expanded.add(v)
+
     def eval_load(strategy, load, kb, uk, target_val):
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
-        edge_params = make_edge_params(upgraded, args.eta, knobs, dist_map)
-        p_bsm, swap_lat = swap_params_for_strategy(strategy, knobs)
-        if upgraded:
-            rep_edges = [edge_params[e] for e in edge_params if e in upgraded]
+        path_edges = shortest_path(nodes_expanded, expanded_edges, "1", "14")
+        edge_params = {}
+        for a, b, dist_m, orig in path_edges:
+            dist_km = dist_m / 1000.0
+            use_strat = strategy
+            if strategy == "BK":
+                use_strat = "BK"
+            else:
+                use_strat = "EQT" if orig in upgraded else "BK"
+            p_eg, attempt_rate, coherence, p_bsm_seg, extra_lat = edge_params_for_strategy(use_strat, dist_km, args.eta, knobs)
+            edge_params[tuple(sorted((a, b)))] = EdgeParams(attempt_rate, p_eg, coherence, extra_lat)
+
+        if strategy == "BK":
+            p_bsm, swap_lat = swap_params_for_strategy("BK", knobs)
         else:
-            rep_edges = [edge_params[e] for e in edge_params]
-        base_param = rep_edges[0]
-        chain_edges = {
-            tuple(sorted(("A", "R1"))): base_param,
-            tuple(sorted(("R1", "R2"))): base_param,
-            tuple(sorted(("R2", "B"))): base_param,
-        }
+            p_bsm, swap_lat = swap_params_for_strategy("EQT", knobs)
+        chain_path = []
+        for a, b, _, _ in path_edges:
+            if not chain_path:
+                chain_path.append(a)
+            chain_path.append(b)
+        p_bsm, swap_lat = swap_params_for_strategy(strategy, knobs)
         avails = []
         for seed in seeds:
             res = simulate_entanglement_service(
-                path=["A", "R1", "R2", "B"],
-                edge_params=chain_edges,
+                path=chain_path,
+                edge_params=edge_params,
                 swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
                 seed=seed,
                 horizon_s=args.horizon_s,

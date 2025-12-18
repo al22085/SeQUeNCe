@@ -156,9 +156,10 @@ def simulate_entanglement_service(
             break
         if kind == "eg_attempt":
             edge = payload
-            params = edge_params[edge]
-            # schedule next attempt
-            next_t = now + _sample_exp(rng, params.attempt_rate_hz)
+        params = edge_params[edge]
+        # schedule next attempt
+        next_t = now + _sample_exp(rng, params.attempt_rate_hz)
+        if next_t <= horizon_s + tau_s:
             heapq.heappush(event_heap, (next_t, "eg_attempt", edge))
             if rng.random() < params.p_eg:
                 available_t = now + params.extra_latency_s
