@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from scripts.qn_topologies import (
     nsfnet_edges,
     nsfnet_topology,
-    load_default_nsfnet_distances,
+    load_distance_dataset,
     load_edge_distances_csv,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
@@ -126,6 +126,12 @@ def parse_args():
     p.add_argument("--p-bsm", type=float, default=0.9)
     p.add_argument("--edge-distance-csv", type=Path, default=None)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
+    p.add_argument(
+        "--distance-dataset-id",
+        type=str,
+        default="sndlib_great_circle_heuristic",
+        help="Distance dataset id (sndlib_great_circle_heuristic | topologybench_nsfnet13)",
+    )
     p.add_argument("--upgrade-k-list", type=str, default="0", help="Comma list of edge counts to upgrade.")
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
     p.add_argument("--workers", type=int, default=1)
@@ -144,7 +150,7 @@ def main():
     upgrade_k_list = parse_list(args.upgrade_k_list, int)
 
     topo = nsfnet_topology()
-    dist_map = load_default_nsfnet_distances()
+    dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
 

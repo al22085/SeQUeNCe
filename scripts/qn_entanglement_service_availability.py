@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_experiment_presets import apply_preset
-from scripts.qn_topologies import nsfnet_edges, load_edge_distances_csv, load_default_nsfnet_distances
+from scripts.qn_topologies import nsfnet_edges, load_edge_distances_csv, load_distance_dataset
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
 
 
@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--edge-params-csv", type=Path, default=None, help="CSV with u,v,attempt_rate_hz,p_eg,coherence_time_s")
     p.add_argument("--edge-distance-csv", type=Path, default=None, help="CSV with u,v,distance_m for NSFNET")
+    p.add_argument(
+        "--distance-dataset-id",
+        type=str,
+        default="sndlib_great_circle_heuristic",
+        help="Distance dataset id (sndlib_great_circle_heuristic | topologybench_nsfnet13)",
+    )
     p.add_argument("--p-eg-per-km", type=float, default=None, help="If set with distance map, compute p_eg=exp(-loss_db_per_km*dist_km) using loss_db_per_km= -10*log10(p_eg_per_km)")
     p.add_argument("--loss-db-per-km", type=float, default=0.2, help="Loss in dB/km for distance->p_eg mapping")
     p.add_argument("--preset", type=str, default="")
@@ -71,7 +77,7 @@ def main():
     edge_params = {}
     dist_map = {}
     if args.topology == "nsfnet":
-        dist_map = load_default_nsfnet_distances()
+        dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
 
@@ -157,6 +163,7 @@ def main():
             "key_bits_per_pair": kb,
             "seeds": seeds,
             "targets": {tgt: availability_mean >= tgt for tgt in (0.9, 0.99, 0.999)},
+            "distance_dataset_id": args.distance_dataset_id,
         }
         summary_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote raw to {raw_path}")

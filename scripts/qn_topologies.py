@@ -67,13 +67,18 @@ def load_edge_distances_csv(path: Path):
     return dist
 
 
-def load_default_nsfnet_distances() -> dict:
-    default_path = Path(__file__).resolve().parents[1] / "data" / "nsfnet_distances.csv"
-    if default_path.exists():
-        dist = {}
-        with default_path.open() as f:
+def load_distance_dataset(dataset_id: str):
+    base = Path(__file__).resolve().parents[1] / "data"
+    if dataset_id == "topologybench_nsfnet13":
+        path = base / "nsfnet_distances_topologybench.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"{path} missing; run qn_import_nsfnet_distances_from_topologybench.py")
+    else:
+        path = base / "nsfnet_distances.csv"
+    dist = {}
+    if path.exists():
+        with path.open() as f:
             reader = csv.DictReader(f)
             for row in reader:
                 dist[tuple(sorted((row["u"], row["v"])))] = float(row["distance_km"]) * 1000.0
-        return dist
-    return {}
+    return dist

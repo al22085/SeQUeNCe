@@ -108,11 +108,16 @@ for target in 0.9 0.99 0.999; do
 done
 
 # Entanglement service availability (discrete-event)
+ENT_DIST_DATASET_ID=${DIST_DATASET_ID:-sndlib_great_circle_heuristic}
 ENT_DIST_CSV="data/nsfnet_distances.csv"
+if [[ "${ENT_DIST_DATASET_ID}" == "topologybench_nsfnet13" ]]; then
+  ENT_DIST_CSV="data/nsfnet_distances_topologybench.csv"
+fi
 python scripts/qn_entanglement_service_availability.py \
   --strategy BK \
   --topology nsfnet \
   --edge-distance-csv "${ENT_DIST_CSV}" \
+  --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
   --key-bits-per-pair-list "0.5,1.0" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service/BK"
@@ -120,6 +125,7 @@ python scripts/qn_entanglement_service_availability.py \
   --strategy EQT \
   --topology nsfnet \
   --edge-distance-csv "${ENT_DIST_CSV}" \
+  --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
   --key-bits-per-pair-list "0.5,1.0" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service/EQT"
@@ -128,12 +134,14 @@ python scripts/qn_entanglement_service_availability.py \
 python scripts/qn_entanglement_service_sweep.py \
   --strategies BK,EQT \
   --edge-distance-csv "${ENT_DIST_CSV}" \
+  --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service_sweep"
 
 python scripts/qn_entanglement_service_frontier.py \
   --strategies BK,EQT \
   --edge-distance-csv "${ENT_DIST_CSV}" \
+  --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service_frontier"
 
