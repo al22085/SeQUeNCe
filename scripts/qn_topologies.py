@@ -1,3 +1,6 @@
+import csv
+from pathlib import Path
+
 NSFNET_NODES = [
     "1",
     "2",
@@ -51,3 +54,14 @@ def nsfnet_topology():
 
 def nsfnet_edges():
     return list(NSFNET_EDGES)
+
+
+def load_edge_distances_csv(path: Path):
+    dist = {}
+    with path.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            u, v = row["u"], row["v"]
+            d = float(row["distance_m"])
+            dist[tuple(sorted((u, v)))] = d
+    return dist

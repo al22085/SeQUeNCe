@@ -28,6 +28,6 @@ def test_entanglement_service_determinism():
         ]
         subprocess.run(base_cmd + ["--out-dir", str(out_dir1)], check=True, cwd=Path(__file__).resolve().parents[2])
         subprocess.run(base_cmd + ["--out-dir", str(out_dir2)], check=True, cwd=Path(__file__).resolve().parents[2])
-        s1 = json.loads((out_dir1 / "summary.json").read_text())
-        s2 = json.loads((out_dir2 / "summary.json").read_text())
+        s1 = json.loads((out_dir1 / "kbits_1.0" / "summary.json").read_text())
+        s2 = json.loads((out_dir2 / "kbits_1.0" / "summary.json").read_text())
         assert s1["availability_mean"] == s2["availability_mean"]

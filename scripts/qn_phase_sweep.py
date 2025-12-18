@@ -103,6 +103,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attn", type=float, default=0.005)
     p.add_argument("--cc-delay", type=float, default=1e6)
     p.add_argument("--fidelity", type=float, default=0.5)
+    p.add_argument("--attempt-rate-hz", type=float, default=1e5, help="Logged for validation (placeholder mapping).")
+    p.add_argument("--p-eg", type=float, default=0.2, help="Logged per-edge EG success prob (uniform placeholder).")
+    p.add_argument("--coherence-time-s", type=float, default=0.02, help="Logged coherence time (uniform placeholder).")
+    p.add_argument("--p-bsm", type=float, default=0.9, help="Logged BSM success prob (placeholder).")
+    p.add_argument("--key-bits-per-pair", type=float, default=1.0, help="Logged for validation use.")
     p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
     p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
     p.add_argument("--resume", action="store_true", help="Resume from existing raw CSV to skip completed cells.")
@@ -134,6 +139,11 @@ def main():
         "deadline_s",
         "deadline_ps",
         "setup_slack_s",
+        "attempt_rate_hz",
+        "p_eg",
+        "coherence_time_s",
+        "p_bsm",
+        "key_bits_per_pair",
         "status",
         "error",
     ]
@@ -185,6 +195,11 @@ def main():
                     res["deadline_s"],
                     res["deadline_ps"],
                     res["setup_slack_s"],
+                    args.attempt_rate_hz,
+                    args.p_eg,
+                    args.coherence_time_s,
+                    args.p_bsm,
+                    args.key_bits_per_pair,
                     "ok",
                     "",
                 )
@@ -194,6 +209,10 @@ def main():
                     eta,
                     strat,
                     seed,
+                    "",
+                    "",
+                    "",
+                    "",
                     "",
                     "",
                     "",
