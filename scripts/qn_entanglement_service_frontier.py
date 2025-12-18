@@ -133,7 +133,11 @@ def main():
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
         edge_params = make_edge_params(upgraded, args.eta, knobs, dist_map)
         p_bsm, swap_lat = swap_params_for_strategy(strategy, knobs)
-        base_param = next(iter(edge_params.values()))
+        if upgraded:
+            rep_edges = [edge_params[e] for e in edge_params if e in upgraded]
+        else:
+            rep_edges = [edge_params[e] for e in edge_params]
+        base_param = rep_edges[0]
         chain_edges = {
             tuple(sorted(("A", "R1"))): base_param,
             tuple(sorted(("R1", "R2"))): base_param,
