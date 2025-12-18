@@ -15,6 +15,7 @@ class EdgeParams:
     attempt_rate_hz: float
     p_eg: float
     coherence_time_s: float
+    extra_latency_s: float = 0.0
 
 
 @dataclass
@@ -157,9 +158,10 @@ def simulate_entanglement_service(
             next_t = now + _sample_exp(rng, params.attempt_rate_hz)
             heapq.heappush(event_heap, (next_t, "eg_attempt", edge))
             if rng.random() < params.p_eg:
-                edge_pairs[edge].append(now + params.coherence_time_s)
+                available_t = now + params.extra_latency_s
+                edge_pairs[edge].append(available_t + params.coherence_time_s)
                 edge_pairs[edge].sort()
-                try_swap(now + swap_params.latency_s)
+                try_swap(available_t + swap_params.latency_s)
         elif kind == "req":
             req = payload
             pending.append(req)

@@ -113,6 +113,8 @@ ENT_DIST_CSV="data/nsfnet_distances.csv"
 if [[ "${ENT_DIST_DATASET_ID}" == "topologybench_nsfnet13" ]]; then
   ENT_DIST_CSV="data/nsfnet_distances_topologybench.csv"
 fi
+ENT_ETA_LIST=${ENT_ETA_LIST:-"0.2,0.5,0.8"}
+ENT_UPGRADE_LIST=${ENT_UPGRADE_LIST:-"0,3,7"}
 python scripts/qn_entanglement_service_availability.py \
   --strategy BK \
   --topology nsfnet \
@@ -144,6 +146,16 @@ python scripts/qn_entanglement_service_frontier.py \
   --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
   --workers "${EFFECTIVE_WORKERS}" \
   --out-dir "${OUT_DIR}/entanglement_service_frontier"
+for ETA in $(echo "${ENT_ETA_LIST}" | tr ',' ' '); do
+  python scripts/qn_entanglement_service_frontier.py \
+    --strategies BK,EQT \
+    --edge-distance-csv "${ENT_DIST_CSV}" \
+    --distance-dataset-id "${ENT_DIST_DATASET_ID}" \
+    --eta "${ETA}" \
+    --upgrade-k-list "${ENT_UPGRADE_LIST}" \
+    --workers "${EFFECTIVE_WORKERS}" \
+    --out-dir "${OUT_DIR}/entanglement_service_frontier_eta_${ETA}"
+done
 
 python scripts/plot_qn_entanglement_service_frontier.py \
   --in-agg "${OUT_DIR}/entanglement_service_frontier/ent_frontier_agg.csv" \

@@ -23,6 +23,7 @@ from scripts.qn_topologies import (
     load_distance_dataset,
     load_edge_distances_csv,
 )
+from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
 
 
@@ -75,29 +76,17 @@ def pick_upgrade_edges(topo, policy: str, k: int) -> List[Tuple[str, str]]:
 
 def make_edge_params(
     upgraded: List[Tuple[str, str]],
-    attempt_rate_bk: float,
-    p_eg_bk: float,
-    attempt_rate_eqt: float,
-    p_eg_eqt: float,
-    coherence_bk: float,
-    coherence_eqt: float,
+    eta: float,
+    knobs: StrategyKnobs,
     dist_map: Dict[Tuple[str, str], float],
-    loss_db_per_km: float,
-    override_bk_dist_map: bool = False,
 ) -> Dict[Tuple[str, str], EdgeParams]:
     edges = [tuple(sorted(e)) for e in nsfnet_edges()]
     params = {}
     for e in edges:
-        dist_km = dist_map.get(e, 1000.0) / 1000.0 if dist_map else None
-        if dist_km is not None and override_bk_dist_map:
-            attn_db = loss_db_per_km * dist_km
-            p_eg_bk_eff = math.exp(-attn_db * math.log(10) / 10.0)
-        else:
-            p_eg_bk_eff = p_eg_bk
-        if e in upgraded:
-            params[e] = EdgeParams(attempt_rate_eqt, p_eg_eqt, coherence_eqt)
-        else:
-            params[e] = EdgeParams(attempt_rate_bk, p_eg_bk_eff, coherence_bk)
+        dist_km = dist_map.get(e, 1000.0) / 1000.0 if dist_map else 1.0
+        use_strategy = "EQT" if e in upgraded else "BK"
+        p_eg, attempt_rate, coherence, p_bsm_edge, extra_lat = edge_params_for_strategy(use_strategy, dist_km, eta, knobs)
+        params[e] = EdgeParams(attempt_rate, p_eg, coherence, extra_lat)
     return params
 
 
@@ -124,6 +113,15 @@ def parse_args():
     p.add_argument("--coherence-bk", type=float, default=0.02)
     p.add_argument("--coherence-eqt", type=float, default=0.03)
     p.add_argument("--p-bsm", type=float, default=0.9)
+    p.add_argument("--eta", type=float, default=0.8)
+    p.add_argument("--p-bsm-opt", type=float, default=0.9)
+    p.add_argument("--p-bsm-sc", type=float, default=0.95)
+    p.add_argument("--coherence-opt-s", type=float, default=0.02)
+    p.add_argument("--coherence-sc-s", type=float, default=0.03)
+    p.add_argument("--attempt-rate-opt-hz", type=float, default=1e5)
+    p.add_argument("--attempt-rate-sc-hz", type=float, default=1e5)
+    p.add_argument("--transduction-latency-s", type=float, default=0.0)
+    p.add_argument("--swap-latency-s", type=float, default=0.0)
     p.add_argument("--edge-distance-csv", type=Path, default=None)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
     p.add_argument(
@@ -134,6 +132,7 @@ def parse_args():
     )
     p.add_argument("--upgrade-k-list", type=str, default="0", help="Comma list of edge counts to upgrade.")
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
+    p.add_argument("--upgrade-mode", choices=["edges", "repeaters"], default="edges")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_sweep"))
     p.add_argument("--resume", action="store_true")
@@ -148,11 +147,24 @@ def main():
     kbits_list = parse_list(args.key_bits_per_pair_list, float)
     targets = parse_list(args.targets, float)
     upgrade_k_list = parse_list(args.upgrade_k_list, int)
+    if args.upgrade_mode != "edges":
+        raise SystemExit("upgrade-mode repeaters not implemented; use edges")
 
     topo = nsfnet_topology()
     dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
+    knobs = StrategyKnobs(
+        attempt_rate_opt_hz=args.attempt_rate_opt_hz,
+        attempt_rate_sc_hz=args.attempt_rate_sc_hz,
+        p_bsm_opt=args.p_bsm_opt,
+        p_bsm_sc=args.p_bsm_sc,
+        coherence_opt_s=args.coherence_opt_s,
+        coherence_sc_s=args.coherence_sc_s,
+        loss_db_per_km=args.loss_db_per_km,
+        transduction_latency_s=args.transduction_latency_s,
+        swap_latency_s=args.swap_latency_s,
+    )
 
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +176,9 @@ def main():
         "seed",
         "kbits",
         "upgrade_k",
+        "eta",
+        "distance_dataset_id",
+        "upgrade_edges",
         "availability",
         "served",
         "total",
@@ -185,19 +200,8 @@ def main():
     def run_task(task):
         strat, load, kb, uk, seed = task
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
-        edge_params = make_edge_params(
-            upgraded,
-            args.attempt_rate_bk,
-            args.p_eg_bk,
-            args.attempt_rate_eqt,
-            args.p_eg_eqt,
-            args.coherence_bk,
-            args.coherence_eqt,
-            dist_map,
-            args.loss_db_per_km,
-            override_bk_dist_map=True,
-        )
-        swap_params = SwapParams(args.p_bsm, 0.0)
+        edge_params = make_edge_params(upgraded, args.eta, knobs, dist_map)
+        p_bsm, swap_lat = swap_params_for_strategy(strat, knobs)
         base_param = next(iter(edge_params.values()))
         chain_edges = {
             tuple(sorted(("A", "R1"))): base_param,
@@ -207,7 +211,7 @@ def main():
         res = simulate_entanglement_service(
             path=["A", "R1", "R2", "B"],
             edge_params=chain_edges,
-            swap_params=swap_params,
+            swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
             seed=seed,
             horizon_s=args.horizon_s,
             tau_s=args.tau_s,
@@ -215,7 +219,7 @@ def main():
             lambda_req=load,
             key_bits_per_pair=kb,
         )
-        return (strat, load, kb, uk, seed, res["availability"], res["served"], res["total"])
+        return (strat, load, kb, uk, seed, res["availability"], res["served"], res["total"], upgraded)
 
     results = []
     max_workers = min(args.workers, 4)
@@ -228,19 +232,61 @@ def main():
                 fut_map = {ex.submit(run_task, t): t for t in tasks}
                 for fut in as_completed(fut_map):
                     row = fut.result()
-                    writer.writerow(row)
+                    writer.writerow(
+                        [
+                            row[0],
+                            row[1],
+                            row[4],
+                            row[2],
+                            row[3],
+                            args.eta,
+                            args.distance_dataset_id,
+                            ";".join("-".join(e) for e in sorted(row[8])),
+                            row[5],
+                            row[6],
+                            row[7],
+                        ]
+                    )
                     f_raw.flush()
                     results.append(row)
         except PermissionError:
             for t in tasks:
                 row = run_task(t)
-                writer.writerow(row)
+                writer.writerow(
+                    [
+                        row[0],
+                        row[1],
+                        row[4],
+                        row[2],
+                        row[3],
+                        args.eta,
+                        args.distance_dataset_id,
+                        ";".join("-".join(e) for e in sorted(row[8])),
+                        row[5],
+                        row[6],
+                        row[7],
+                    ]
+                )
                 f_raw.flush()
                 results.append(row)
     else:
         for t in tasks:
             row = run_task(t)
-            writer.writerow(row)
+            writer.writerow(
+                [
+                    row[0],
+                    row[1],
+                    row[4],
+                    row[2],
+                    row[3],
+                    args.eta,
+                    args.distance_dataset_id,
+                    ";".join("-".join(e) for e in sorted(row[8])),
+                    row[5],
+                    row[6],
+                    row[7],
+                ]
+            )
             f_raw.flush()
             results.append(row)
     f_raw.close()

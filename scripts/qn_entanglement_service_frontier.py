@@ -27,6 +27,7 @@ from scripts.qn_entanglement_service_sweep import (
     make_edge_params,
     ci95,
 )
+from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import SwapParams, simulate_entanglement_service
 
 
@@ -53,6 +54,15 @@ def parse_args():
     p.add_argument("--coherence-bk", type=float, default=0.02)
     p.add_argument("--coherence-eqt", type=float, default=0.03)
     p.add_argument("--p-bsm", type=float, default=0.9)
+    p.add_argument("--eta", type=float, default=0.8)
+    p.add_argument("--p-bsm-opt", type=float, default=0.9)
+    p.add_argument("--p-bsm-sc", type=float, default=0.95)
+    p.add_argument("--coherence-opt-s", type=float, default=0.02)
+    p.add_argument("--coherence-sc-s", type=float, default=0.03)
+    p.add_argument("--attempt-rate-opt-hz", type=float, default=1e5)
+    p.add_argument("--attempt-rate-sc-hz", type=float, default=1e5)
+    p.add_argument("--transduction-latency-s", type=float, default=0.0)
+    p.add_argument("--swap-latency-s", type=float, default=0.0)
     p.add_argument("--edge-distance-csv", type=Path, default=None)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
     p.add_argument(
@@ -63,6 +73,7 @@ def parse_args():
     )
     p.add_argument("--upgrade-k-list", type=str, default="0")
     p.add_argument("--upgrade-policy", choices=["shortestpath_count", "betweenness"], default="shortestpath_count")
+    p.add_argument("--upgrade-mode", choices=["edges", "repeaters"], default="edges")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_frontier"))
     p.add_argument("--resume", action="store_true")
@@ -76,11 +87,24 @@ def main():
     kbits_list = parse_list(args.kbits_list, float)
     seeds = parse_list(args.seeds, int)
     upgrade_k_list = parse_list(args.upgrade_k_list, int)
+    if args.upgrade_mode != "edges":
+        raise SystemExit("upgrade-mode repeaters not implemented; use edges")
 
     topo = nsfnet_topology()
     dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
+    knobs = StrategyKnobs(
+        attempt_rate_opt_hz=args.attempt_rate_opt_hz,
+        attempt_rate_sc_hz=args.attempt_rate_sc_hz,
+        p_bsm_opt=args.p_bsm_opt,
+        p_bsm_sc=args.p_bsm_sc,
+        coherence_opt_s=args.coherence_opt_s,
+        coherence_sc_s=args.coherence_sc_s,
+        loss_db_per_km=args.loss_db_per_km,
+        transduction_latency_s=args.transduction_latency_s,
+        swap_latency_s=args.swap_latency_s,
+    )
 
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -91,6 +115,9 @@ def main():
         "target",
         "kbits",
         "upgrade_k",
+        "eta",
+        "distance_dataset_id",
+        "upgrade_edges",
         "load",
         "availability_mean",
         "availability_std",
@@ -104,19 +131,8 @@ def main():
 
     def eval_load(strategy, load, kb, uk, target_val):
         upgraded = pick_upgrade_edges(topo, args.upgrade_policy, uk)
-        edge_params = make_edge_params(
-            upgraded,
-            args.attempt_rate_bk,
-            args.p_eg_bk,
-            args.attempt_rate_eqt,
-            args.p_eg_eqt,
-            args.coherence_bk,
-            args.coherence_eqt,
-            dist_map,
-            args.loss_db_per_km,
-            override_bk_dist_map=True,
-        )
-        swap_params = SwapParams(args.p_bsm, 0.0)
+        edge_params = make_edge_params(upgraded, args.eta, knobs, dist_map)
+        p_bsm, swap_lat = swap_params_for_strategy(strategy, knobs)
         base_param = next(iter(edge_params.values()))
         chain_edges = {
             tuple(sorted(("A", "R1"))): base_param,
@@ -128,7 +144,7 @@ def main():
             res = simulate_entanglement_service(
                 path=["A", "R1", "R2", "B"],
                 edge_params=chain_edges,
-                swap_params=swap_params,
+                swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
                 seed=seed,
                 horizon_s=args.horizon_s,
                 tau_s=args.tau_s,
@@ -139,7 +155,21 @@ def main():
             avails.append(res["availability"])
         mean = float(np.mean(avails)) if avails else 0.0
         std = float(np.std(avails, ddof=0)) if avails else 0.0
-        writer.writerow([strategy, target_val, kb, uk, load, mean, std, len(avails)])
+        writer.writerow(
+            [
+                strategy,
+                target_val,
+                kb,
+                uk,
+                args.eta,
+                args.distance_dataset_id,
+                ";".join("-".join(e) for e in sorted(upgraded)),
+                load,
+                mean,
+                std,
+                len(avails),
+            ]
+        )
         f_raw.flush()
         return mean, std
 
