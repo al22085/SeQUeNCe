@@ -128,6 +128,7 @@ def main():
                         if not chain_path:
                             chain_path.append(a)
                         chain_path.append(b)
+                    num_requests = max(1, int(round(load * 10)))
                     res = simulate_entanglement_service(
                         path=chain_path,
                         edge_params=edge_params,
@@ -135,8 +136,8 @@ def main():
                         seed=seed,
                         horizon_s=args.horizon_s,
                         tau_s=args.tau_s,
-                        num_requests=0,
-                        lambda_req=load,
+                        num_requests=num_requests,
+                        lambda_req=None,
                         otp_data_rate_bps=args.otp_data_rate_bps,
                         otp_session_duration_s=args.otp_session_duration_s,
                         otp_directions=args.otp_directions,
