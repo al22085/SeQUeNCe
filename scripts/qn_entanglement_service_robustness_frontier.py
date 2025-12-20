@@ -44,6 +44,7 @@ def parse_args():
     p.add_argument("--strategies", type=str, default="BK,EQT")
     p.add_argument("--targets", type=str, default="0.9,0.99,0.999")
     p.add_argument("--kbits-list", type=str, default="0.5,1.0")
+    p.add_argument("--key-bits-per-pair-list", type=str, default=None, help="Alias for kbits-list.")
     p.add_argument("--seeds", type=str, default="0,1,2,3")
     p.add_argument("--load-grid", type=str, default="0.5,1.0,2.0,5.0")
     p.add_argument("--horizon-s", type=float, default=0.5)
@@ -59,6 +60,7 @@ def parse_args():
     p.add_argument("--transduction-latency-s", type=float, default=0.0)
     p.add_argument("--swap-latency-s", type=float, default=0.0)
     p.add_argument("--segment-length-km", type=float, default=50.0)
+    p.add_argument("--network-scope", choices=["shortest_path", "full"], default="shortest_path", help="Restrict to shortest-path chain for efficiency.")
     p.add_argument("--edge-distance-csv", type=Path, default=None)
     p.add_argument(
         "--distance-dataset-id",
@@ -91,7 +93,8 @@ def main():
     upgrade_ks = parse_list(args.upgrade_k_list, int)
     strategies = parse_list(args.strategies, str)
     targets = parse_list(args.targets, float)
-    kbits_list = parse_list(args.kbits_list, float)
+    kbits_raw = args.key_bits_per_pair_list if args.key_bits_per_pair_list else args.kbits_list
+    kbits_list = parse_list(kbits_raw, float)
     seeds = parse_list(args.seeds, int)
     load_grid = parse_list(args.load_grid, float)
 
@@ -135,7 +138,10 @@ def main():
 
     tasks = []
     for pair in pairs:
-        path_edges = shortest_path_edges(expanded_edges, pair[0], pair[1])
+        if args.network_scope == "shortest_path":
+            path_edges = shortest_path_edges(expanded_edges, pair[0], pair[1])
+        else:
+            path_edges = expanded_edges
         if not path_edges:
             continue
         for eta_val in etas:
@@ -171,6 +177,7 @@ def main():
                     if not chain_path:
                         chain_path.append(a)
                     chain_path.append(b)
+                num_requests = max(1, int(round(load * 10)))
                 res = simulate_entanglement_service(
                     path=chain_path,
                     edge_params=edge_params,
@@ -178,8 +185,8 @@ def main():
                     seed=seed,
                     horizon_s=args.horizon_s,
                     tau_s=args.tau_s,
-                    num_requests=0,
-                    lambda_req=load,
+                    num_requests=num_requests,
+                    lambda_req=None,
                     otp_data_rate_bps=args.otp_data_rate_bps,
                     otp_session_duration_s=args.otp_session_duration_s,
                     otp_directions=args.otp_directions,
