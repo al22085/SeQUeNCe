@@ -58,6 +58,7 @@ def parse_args():
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--key-bits-per-pair", type=float, default=1.0)
+    p.add_argument("--network-scope", choices=["shortest_path", "full"], default="shortest_path")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--out-csv", type=Path, default=Path("out/qn_calibrate_pair.csv"))
     return p.parse_args()
@@ -73,9 +74,12 @@ def main():
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
     expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
-    path_edges = shortest_path_edges(expanded_edges, args.src, args.dst)
-    if not path_edges:
-        raise SystemExit(f"No path between {args.src} and {args.dst}")
+    if args.network_scope == "shortest_path":
+        path_edges = shortest_path_edges(expanded_edges, args.src, args.dst)
+        if not path_edges:
+            raise SystemExit(f"No path between {args.src} and {args.dst}")
+    else:
+        path_edges = expanded_edges
 
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
