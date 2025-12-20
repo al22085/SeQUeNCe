@@ -47,6 +47,10 @@ def parse_args():
     p.add_argument("--key-bits-per-pair-list", type=str, default=None, help="Alias for kbits-list.")
     p.add_argument("--seeds", type=str, default="0,1,2,3")
     p.add_argument("--load-grid", type=str, default="0.5,1.0,2.0,5.0")
+    p.add_argument("--binary-search", action="store_true", help="Enable binary search on load instead of fixed grid.")
+    p.add_argument("--load-min", type=float, default=0.001)
+    p.add_argument("--load-max", type=float, default=2.0)
+    p.add_argument("--load-tol", type=float, default=0.05)
     p.add_argument("--horizon-s", type=float, default=0.5)
     p.add_argument("--tau-s", type=float, default=0.1)
     p.add_argument("--attempt-rate-opt-hz", type=float, default=10000)
@@ -155,9 +159,7 @@ def main():
         pair, path_edges, eta_val, uk, strat, kb = task
         upgraded_edges = upgrade_edges_cache[uk]
         p_bsm, swap_lat = swap_params_for_strategy(strat, knobs)
-        load_rows = []
-        frontier_rows = []
-        for load in load_grid:
+        def evaluate_load(load: float) -> float:
             avails = []
             for seed in seeds:
                 edge_params: Dict[Tuple[str, str], EdgeParams] = {}
@@ -195,26 +197,77 @@ def main():
                     swap_schedule=args.swap_schedule,
                 )
                 avails.append(res["availability"])
-            mean_av = float(np.mean(avails)) if avails else 0.0
-            std_av = float(np.std(avails, ddof=0)) if avails else 0.0
-            load_rows.append((load, mean_av, std_av, len(avails)))
-        # frontiers per target
-        for tgt in targets:
-            frontier = 0.0
-            for load, mean_av, _, _ in load_rows:
-                if mean_av >= tgt and load > frontier:
-                    frontier = load
-            frontier_rows.append(
-                {
-                    "pair": f"{pair[0]}-{pair[1]}",
-                    "eta": eta_val,
-                    "strategy": strat,
-                    "upgrade_k": uk,
-                    "kbits": kb,
-                    "target": tgt,
-                    "frontier_load": frontier,
-                }
-            )
+            return float(np.mean(avails)) if avails else 0.0, float(np.std(avails, ddof=0)) if avails else 0.0
+
+        load_rows = []
+        frontier_rows = []
+        evaluated = set()
+
+        def record(load, mean_av, std_av):
+            load_rows.append((load, mean_av, std_av, len(seeds)))
+            evaluated.add(load)
+
+        if args.binary_search:
+            for tgt in targets:
+                low = args.load_min
+                high = args.load_max
+                # evaluate bounds
+                if low not in evaluated:
+                    m, s = evaluate_load(low)
+                    record(low, m, s)
+                else:
+                    m, s = next((mn, st) for l, mn, st, _ in load_rows if l == low)
+                if high not in evaluated:
+                    mh, sh = evaluate_load(high)
+                    record(high, mh, sh)
+                else:
+                    mh, sh = next((mn, st) for l, mn, st, _ in load_rows if l == high)
+                frontier = 0.0
+                if m < tgt:
+                    frontier = 0.0
+                elif mh >= tgt:
+                    frontier = high
+                else:
+                    while high - low > args.load_tol:
+                        mid = (low + high) / 2.0
+                        mm, sm = evaluate_load(mid)
+                        record(mid, mm, sm)
+                        if mm >= tgt:
+                            low = mid
+                        else:
+                            high = mid
+                    frontier = low
+                frontier_rows.append(
+                    {
+                        "pair": f"{pair[0]}-{pair[1]}",
+                        "eta": eta_val,
+                        "strategy": strat,
+                        "upgrade_k": uk,
+                        "kbits": kb,
+                        "target": tgt,
+                        "frontier_load": frontier,
+                    }
+                )
+        else:
+            for load in load_grid:
+                m, s = evaluate_load(load)
+                record(load, m, s)
+            for tgt in targets:
+                frontier = 0.0
+                for load, mean_av, _, _ in load_rows:
+                    if mean_av >= tgt and load > frontier:
+                        frontier = load
+                frontier_rows.append(
+                    {
+                        "pair": f"{pair[0]}-{pair[1]}",
+                        "eta": eta_val,
+                        "strategy": strat,
+                        "upgrade_k": uk,
+                        "kbits": kb,
+                        "target": tgt,
+                        "frontier_load": frontier,
+                    }
+                )
         return pair, eta_val, strat, uk, kb, load_rows, frontier_rows
 
     max_workers = min(max(1, args.workers), 4)
