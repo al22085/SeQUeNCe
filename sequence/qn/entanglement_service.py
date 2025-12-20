@@ -55,6 +55,8 @@ def simulate_entanglement_service(
     otp_directions: int = 2,
     key_bits_per_pair: float = 1.0,
     targets=(0.9, 0.99, 0.999),
+    swap_schedule: str = "sequential",
+    debug_stats: bool = False,
 ) -> Dict:
     """Simulate request-level availability on a given path."""
     rng = np.random.default_rng(seed)
@@ -85,6 +87,13 @@ def simulate_entanglement_service(
             total_bits_requested += bits_needed
 
     event_heap: List[Tuple[float, str, object]] = []
+    stats = {
+        "eg_success_events": 0,
+        "swap_attempts": 0,
+        "swap_success": 0,
+        "swap_fail": 0,
+        "mem_expired_events": 0,
+    }
 
     # schedule initial entanglement successes using Poisson thinning:
     # attempts ~ Poisson(R), success prob p_eg => successes ~ Poisson(R*p_eg) (exact).
@@ -118,29 +127,71 @@ def simulate_entanglement_service(
         nonlocal key_bits_available, ab_pairs
         # remove expired pairs first
         clean_expired(t_now)
-        # need at least one pair per edge
-        while all(edge_pairs[e] for e in edges):
-            # take one per edge
-            pairs = []
-            ok = True
+        if swap_schedule == "balanced":
+            # perform level-by-level disjoint swaps
+            seg_pairs = [[(e, edge_pairs[e].pop(0))] for e in edges if edge_pairs[e]]
+            # rebuild as list of (available_t, expiry, left_node, right_node)
+            links = []
+            for idx, (e, exp) in enumerate(edges):
+                while edge_pairs[e] and edge_pairs[e][0] <= t_now:
+                    edge_pairs[e].pop(0)
+                    stats["mem_expired_events"] += 1
             for e in edges:
-                exp = edge_pairs[e].pop(0)
-                if exp <= t_now:
-                    ok = False
+                if edge_pairs[e]:
+                    exp = edge_pairs[e].pop(0)
+                    links.append((t_now, exp, e[0], e[1]))
+            while len(links) > 1:
+                next_links = []
+                i = 0
+                while i + 1 < len(links):
+                    stats["swap_attempts"] += 1
+                    left = links[i]
+                    right = links[i + 1]
+                    if left[1] <= t_now or right[1] <= t_now:
+                        stats["mem_expired_events"] += 1
+                        i += 2
+                        continue
+                    if rng.random() < swap_params.p_bsm:
+                        stats["swap_success"] += 1
+                        exp = min(left[1], right[1])
+                        next_links.append((t_now, exp, left[2], right[3]))
+                    else:
+                        stats["swap_fail"] += 1
+                    i += 2
+                if i < len(links):
+                    next_links.append(links[i])
+                links = next_links
+                if len(links) == 1:
                     break
-                pairs.append((e, exp))
-            if not ok:
-                continue
-            # perform swaps sequentially along path
-            success = True
-            for _ in range(len(edges) - 1):
-                if rng.random() >= swap_params.p_bsm:
-                    success = False
-                    break
-            if success:
+            if len(links) == 1:
                 ab_pairs += 1
                 key_bits_available += key_bits_per_pair
                 serve_pending(t_now)
+        else:
+            # sequential existing behavior
+            while all(edge_pairs[e] for e in edges):
+                pairs = []
+                ok = True
+                for e in edges:
+                    exp = edge_pairs[e].pop(0)
+                    if exp <= t_now:
+                        ok = False
+                        break
+                    pairs.append((e, exp))
+                if not ok:
+                    continue
+                success = True
+                for _ in range(len(edges) - 1):
+                    stats["swap_attempts"] += 1
+                    if rng.random() >= swap_params.p_bsm:
+                        stats["swap_fail"] += 1
+                        success = False
+                        break
+                    stats["swap_success"] += 1
+                if success:
+                    ab_pairs += 1
+                    key_bits_available += key_bits_per_pair
+                    serve_pending(t_now)
 
     def serve_pending(t_now: float):
         nonlocal key_bits_available
@@ -162,6 +213,7 @@ def simulate_entanglement_service(
         if kind == "eg_success":
             edge = payload
             params = edge_params[edge]
+            stats["eg_success_events"] += 1
             rate_succ = params.attempt_rate_hz * params.p_eg
             if rate_succ > 0:
                 next_t = now + _sample_exp(rng, rate_succ)
@@ -192,4 +244,5 @@ def simulate_entanglement_service(
         "targets": target_eval,
         "bits_requested": total_bits_requested,
         "bits_delivered": sum(r.bits_delivered for r in requests),
+        "debug_stats": stats if debug_stats else None,
     }

@@ -59,6 +59,8 @@ def parse_args():
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--key-bits-per-pair", type=float, default=1.0)
     p.add_argument("--network-scope", choices=["shortest_path", "full"], default="shortest_path")
+    p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="sequential")
+    p.add_argument("--debug-stats", action="store_true")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--out-csv", type=Path, default=Path("out/qn_calibrate_pair.csv"))
     return p.parse_args()
@@ -109,6 +111,12 @@ def main():
                 "bits_requested",
                 "bits_delivered",
                 "delivered_pairs",
+                "eg_success_events",
+                "swap_attempts",
+                "swap_success",
+                "swap_fail",
+                "mem_expired_events",
+                "swap_schedule",
             ]
         )
         for eta in etas:
@@ -146,7 +154,10 @@ def main():
                         otp_session_duration_s=args.otp_session_duration_s,
                         otp_directions=args.otp_directions,
                         key_bits_per_pair=args.key_bits_per_pair,
+                        swap_schedule=args.swap_schedule,
+                        debug_stats=args.debug_stats,
                     )
+                    stats = res.get("debug_stats") or {}
                     writer.writerow(
                         [
                             args.src,
@@ -160,6 +171,12 @@ def main():
                             res["bits_requested"],
                             res["bits_delivered"],
                             res["ab_pairs"],
+                            stats.get("eg_success_events", ""),
+                            stats.get("swap_attempts", ""),
+                            stats.get("swap_success", ""),
+                            stats.get("swap_fail", ""),
+                            stats.get("mem_expired_events", ""),
+                            args.swap_schedule,
                         ]
                     )
     print(f"Wrote calibration grid to {args.out_csv}")
