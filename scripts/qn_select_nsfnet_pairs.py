@@ -22,8 +22,15 @@ from scripts.qn_topologies import (
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Select deterministic NSFNET pairs by longest shortest-path distance.")
+    p = argparse.ArgumentParser(description="Select deterministic NSFNET pairs among original nodes.")
     p.add_argument("--k", type=int, default=5, help="Number of pairs to output (default 5).")
+    p.add_argument("--mode", choices=["longest", "shortest", "extremes", "literature_anchored"], default="longest")
+    p.add_argument(
+        "--target-km-list",
+        type=str,
+        default="404,511,1002",
+        help="Target distances for literature_anchored mode (comma list, km).",
+    )
     p.add_argument(
         "--distance-dataset-id",
         type=str,
@@ -57,18 +64,59 @@ def main():
             src, dst = nodes[i], nodes[j]
             d = path_length(src, dst)
             distances.append((d, src, dst))
-    distances.sort(key=lambda x: (-x[0], x[1], x[2]))
-    selected = distances[: args.k]
+    if args.mode == "shortest":
+        distances.sort(key=lambda x: (x[0], x[1], x[2]))
+        selected = distances[: args.k]
+    elif args.mode == "extremes":
+        distances.sort(key=lambda x: (x[0], x[1], x[2]))
+        shortest = distances[: args.k]
+        distances.sort(key=lambda x: (-x[0], x[1], x[2]))
+        longest = distances[: args.k]
+        selected = shortest + longest
+    elif args.mode == "literature_anchored":
+        targets = [float(t) for t in args.target_km_list.split(",") if t]
+        selected = []
+        used = set()
+        for target in targets:
+            best = None
+            for d, s, t in distances:
+                if (s, t) in used:
+                    continue
+                err = abs(d / 1000.0 - target)
+                if best is None or err < best[0] or (err == best[0] and (s, t) < (best[1], best[2])):
+                    best = (err, s, t, d / 1000.0, target)
+            if best:
+                used.add((best[1], best[2]))
+                used.add((best[2], best[1]))
+                selected.append(best)
+        # reshape to (dist_km, src, dst, target_km, abs_err_km)
+        selected = [(b[3], b[1], b[2], b[4], b[0]) for b in selected]
+    else:  # longest
+        distances.sort(key=lambda x: (-x[0], x[1], x[2]))
+        selected = distances[: args.k]
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["src", "dst", "distance_km"])
-        for d, s, t in selected:
-            writer.writerow([s, t, d / 1000.0])
-    print("Selected pairs (src,dst,dist_km):")
-    for d, s, t in selected:
-        print(f"{s},{t},{d/1000.0:.3f}")
+        if args.mode == "literature_anchored":
+            writer.writerow(["label", "src", "dst", "distance_km", "target_km", "abs_error_km"])
+            labels = ["short", "medium", "long"]
+            for idx, row in enumerate(selected):
+                dist_km, s, t, target_km, err = row
+                label = labels[idx] if idx < len(labels) else f"target_{target_km}"
+                writer.writerow([label, s, t, dist_km, target_km, err])
+            print("Selected pairs (label,src,dst,dist_km,target_km,abs_error_km):")
+            for idx, row in enumerate(selected):
+                dist_km, s, t, target_km, err = row
+                label = labels[idx] if idx < len(labels) else f"target_{target_km}"
+                print(f"{label},{s},{t},{dist_km:.3f},{target_km:.3f},{err:.3f}")
+        else:
+            writer.writerow(["src", "dst", "distance_km"])
+            for d, s, t in selected:
+                writer.writerow([s, t, d / 1000.0])
+            print("Selected pairs (src,dst,dist_km):")
+            for d, s, t in selected:
+                print(f"{s},{t},{d/1000.0:.3f}")
     print(f"Wrote {args.out_csv}")
 
 
