@@ -129,14 +129,14 @@ def simulate_entanglement_service(
         clean_expired(t_now)
         if swap_schedule == "balanced":
             # perform level-by-level disjoint swaps
-            seg_pairs = [[(e, edge_pairs[e].pop(0))] for e in edges if edge_pairs[e]]
-            # rebuild as list of (available_t, expiry, left_node, right_node)
             links = []
-            for idx, (e, exp) in enumerate(edges):
+            for e in edges:
+                if e not in edge_pairs:
+                    continue
+                # drop expired
                 while edge_pairs[e] and edge_pairs[e][0] <= t_now:
                     edge_pairs[e].pop(0)
                     stats["mem_expired_events"] += 1
-            for e in edges:
                 if edge_pairs[e]:
                     exp = edge_pairs[e].pop(0)
                     links.append((t_now, exp, e[0], e[1]))
