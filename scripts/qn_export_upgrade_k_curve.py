@@ -20,6 +20,7 @@ def parse_args():
     p.add_argument("--eta", type=float, default=0.9)
     p.add_argument("--kbits", type=float, default=1.0)
     p.add_argument("--upgrade-ks", type=str, default="0,3,7,21")
+    p.add_argument("--load-max", type=float, default=None, help="Optional load_max used in frontier search for clipping flag.")
     return p.parse_args()
 
 
@@ -69,6 +70,10 @@ def main():
         s03 = (eqt_frontiers.get(3, eqt_frontiers[ks_sorted[0]]) - eqt_frontiers[ks_sorted[0]]) / 3
         s37 = (eqt_frontiers.get(7, eqt_frontiers[3]) - eqt_frontiers.get(3, eqt_frontiers[ks_sorted[0]])) / 4
         s721 = (eqt_frontiers.get(21, eqt_frontiers.get(7, eqt_frontiers[ks_sorted[0]])) - eqt_frontiers.get(7, eqt_frontiers[ks_sorted[0]])) / 14
+        clipped = False
+        if args.load_max is not None:
+            threshold = 0.95 * args.load_max
+            clipped = any(v >= threshold for v in eqt_frontiers.values()) or bk0 >= threshold
         results.append(
             {
                 "pair": f"{pair[0]}-{pair[1]}",
@@ -80,6 +85,7 @@ def main():
                 "s721": s721,
                 "c1": s37 - s03,
                 "c2": s721 - s37,
+                "clipped": clipped,
             }
         )
 
@@ -92,7 +98,7 @@ def main():
     if results:
         for agg_name, func in (("median", np.median), ("worst_case", np.min)):
             row = {"pair": agg_name}
-            for key in ["bk0", *(f"eqt{k}" for k in ks_sorted), *(f"ratio{k}" for k in ks_sorted), "s03", "s37", "s721", "c1", "c2"]:
+            for key in ["bk0", *(f"eqt{k}" for k in ks_sorted), *(f"ratio{k}" for k in ks_sorted), "s03", "s37", "s721", "c1", "c2", "clipped"]:
                 row[key] = float(func([r[key] for r in results]))
             agg_rows.append(row)
 
@@ -108,6 +114,7 @@ def main():
         "s721",
         "c1",
         "c2",
+        "clipped",
     ]
     with out_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
