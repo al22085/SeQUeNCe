@@ -72,7 +72,6 @@ def parse_args():
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--network-scope", choices=["shortest_path", "full"], default="shortest_path")
     p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="sequential")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_robustness"))
     return p.parse_args()

@@ -93,6 +93,8 @@ def simulate_entanglement_service(
         "swap_success": 0,
         "swap_fail": 0,
         "mem_expired_events": 0,
+        "swap_levels": 0,
+        "num_segments": len(edges),
     }
 
     # schedule initial entanglement successes using Poisson thinning:
@@ -128,45 +130,54 @@ def simulate_entanglement_service(
         # remove expired pairs first
         clean_expired(t_now)
         if swap_schedule == "balanced":
-            # perform level-by-level disjoint swaps
-            links = []
+            # Require one available pair on every edge before starting balanced swaps.
+            ready_pairs: List[Tuple[float, str, str]] = []
             for e in edges:
-                if e not in edge_pairs:
-                    continue
-                # drop expired
                 while edge_pairs[e] and edge_pairs[e][0] <= t_now:
                     edge_pairs[e].pop(0)
                     stats["mem_expired_events"] += 1
-                if edge_pairs[e]:
-                    exp = edge_pairs[e].pop(0)
-                    links.append((t_now, exp, e[0], e[1]))
-            while len(links) > 1:
-                next_links = []
+                if not edge_pairs[e]:
+                    return
+                exp = edge_pairs[e].pop(0)
+                ready_pairs.append((exp, e[0], e[1]))
+
+            # perform level-by-level disjoint swaps
+            current_time = t_now + swap_params.latency_s
+            pairs = ready_pairs
+            level = 0
+            while len(pairs) > 1:
+                level += 1
+                stats["swap_levels"] += 1
+                next_pairs: List[Tuple[float, str, str]] = []
                 i = 0
-                while i + 1 < len(links):
+                while i + 1 < len(pairs):
                     stats["swap_attempts"] += 1
-                    left = links[i]
-                    right = links[i + 1]
-                    if left[1] <= t_now or right[1] <= t_now:
+                    exp_left, u_left, v_left = pairs[i]
+                    exp_right, u_right, v_right = pairs[i + 1]
+                    if exp_left <= current_time or exp_right <= current_time:
                         stats["mem_expired_events"] += 1
                         i += 2
                         continue
                     if rng.random() < swap_params.p_bsm:
                         stats["swap_success"] += 1
-                        exp = min(left[1], right[1])
-                        next_links.append((t_now, exp, left[2], right[3]))
+                        exp_new = min(exp_left, exp_right)
+                        next_pairs.append((exp_new, u_left, v_right))
                     else:
                         stats["swap_fail"] += 1
                     i += 2
-                if i < len(links):
-                    next_links.append(links[i])
-                links = next_links
-                if len(links) == 1:
+                if i < len(pairs):
+                    next_pairs.append(pairs[i])
+                pairs = next_pairs
+                current_time += swap_params.latency_s
+                if not pairs:
                     break
-            if len(links) == 1:
+
+            if pairs:
+                if debug_stats and len(edges) > 1 and stats["swap_attempts"] == 0:
+                    raise AssertionError("balanced swap produced end-to-end pair without swap attempts")
                 ab_pairs += 1
                 key_bits_available += key_bits_per_pair
-                serve_pending(t_now)
+                serve_pending(current_time)
         else:
             # sequential existing behavior
             while all(edge_pairs[e] for e in edges):
