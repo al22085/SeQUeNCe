@@ -20,6 +20,9 @@ from scripts.qn_topologies import (
     shortest_path_edges,
     nsfnet_topology,
     pick_upgrade_edges,
+    build_topology_from_dist_map,
+    edge_usage_counts_for_pairs,
+    orig_edges_in_path,
 )
 
 
@@ -39,7 +42,11 @@ def parse_args():
     )
     p.add_argument("--out-dir", type=Path, default=Path("out/upgrade_threshold_analysis"))
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
-    p.add_argument("--upgrade-policy", type=str, default="shortestpath_count")
+    p.add_argument(
+        "--upgrade-policy",
+        choices=["global_rank", "pair_demand", "pair_path_only"],
+        default="global_rank",
+    )
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--edge-distance-csv", type=Path, default=None)
     p.add_argument("--distance-dataset-id", type=str, default="topologybench_nsfnet13")
@@ -100,7 +107,17 @@ def main():
     expanded_edges, _, _ = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
 
     topo = nsfnet_topology()
-    upgrade_edges_cache = {k: set(pick_upgrade_edges(topo, args.upgrade_policy, k)) for k in upgrade_ks}
+    if args.edge_distance_csv:
+        topo = build_topology_from_dist_map(dist_map)
+    upgrade_edges_cache = {}
+    if args.upgrade_policy == "global_rank":
+        upgrade_edges_cache = {k: set(pick_upgrade_edges(topo, "shortestpath_count", k)) for k in upgrade_ks}
+    elif args.upgrade_policy == "pair_demand":
+        pair_list = [(r["src"], r["dst"]) for r in pairs]
+        counts = edge_usage_counts_for_pairs(expanded_edges, pair_list)
+        ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        for k in upgrade_ks:
+            upgrade_edges_cache[k] = set([e for e, _ in ranked[:k]])
 
     # load pairs
     pairs = []
@@ -114,7 +131,12 @@ def main():
         src, dst = row["src"], row["dst"]
         label = row.get("label", "")
         for k in upgrade_ks:
-            cov = compute_path_coverage(expanded_edges, src, dst, upgrade_edges_cache[k])
+            if args.upgrade_policy == "pair_path_only":
+                path_orig_edges = orig_edges_in_path(shortest_path_edges(expanded_edges, src, dst))
+                upgraded = set(path_orig_edges[:k])
+            else:
+                upgraded = upgrade_edges_cache.get(k, set())
+            cov = compute_path_coverage(expanded_edges, src, dst, upgraded)
             coverage_rows.append(
                 {
                     "label": label,
@@ -122,6 +144,7 @@ def main():
                     "src": src,
                     "dst": dst,
                     "distance_km": cov["distance_km"],
+                    "upgrade_policy": args.upgrade_policy,
                     "upgrade_k": k,
                     "path_edges_total": cov["path_edges_total"],
                     "path_edges_upgraded": cov["path_edges_upgraded"],
@@ -140,6 +163,7 @@ def main():
                 "src",
                 "dst",
                 "distance_km",
+                "upgrade_policy",
                 "upgrade_k",
                 "path_edges_total",
                 "path_edges_upgraded",
@@ -155,10 +179,10 @@ def main():
     if args.frontier_pairs.exists():
         with args.frontier_pairs.open() as f:
             frontier_rows = list(csv.DictReader(f))
-        cov_index = {(r["pair"], int(r["upgrade_k"])): r for r in coverage_rows}
+        cov_index = {(r["pair"], int(r["upgrade_k"]), r["upgrade_policy"]): r for r in coverage_rows}
         enriched = []
         for r in frontier_rows:
-            key = (r["pair"], int(r["upgrade_k"]))
+            key = (r["pair"], int(r["upgrade_k"]), r.get("upgrade_policy", args.upgrade_policy))
             cov = cov_index.get(key, {})
             enriched.append(
                 {

@@ -75,6 +75,21 @@ def load_edge_distances_csv(path: Path):
     return dist
 
 
+def load_graph_from_edge_csv(path: Path):
+    """Load an undirected graph + distance map from edge CSV (u,v,length_km or distance_km)."""
+    dist = load_edge_distances_csv(path)
+    topo = build_topology_from_dist_map(dist)
+    return topo, dist
+
+
+def build_topology_from_dist_map(dist_map):
+    topo = {}
+    for u, v in dist_map.keys():
+        topo.setdefault(u, []).append(v)
+        topo.setdefault(v, []).append(u)
+    return topo
+
+
 def load_distance_dataset(dataset_id: str):
     base = Path(__file__).resolve().parents[1] / "data"
     if dataset_id == "topologybench_nsfnet13":
@@ -154,6 +169,27 @@ def pick_upgrade_edges(topo, policy: str, k: int) -> List[Tuple[str, str]]:
         ranked = sorted(edge_usage_counts(topo).items(), key=lambda x: (-x[1], x[0]))
         return [e for e, _ in ranked[:k]]
     return []
+
+
+def orig_edges_in_path(path_edges: List[Tuple[str, str, float, Tuple[str, str]]]) -> List[Tuple[str, str]]:
+    """Return unique original edges in path order (sorted tuple per edge)."""
+    out = []
+    seen = set()
+    for _, _, _, orig in path_edges:
+        edge = tuple(sorted(orig))
+        if edge not in seen:
+            seen.add(edge)
+            out.append(edge)
+    return out
+
+
+def edge_usage_counts_for_pairs(expanded_edges, pairs: List[Tuple[str, str]]):
+    counts = defaultdict(int)
+    for src, dst in pairs:
+        path = shortest_path_edges(expanded_edges, src, dst)
+        for edge in orig_edges_in_path(path):
+            counts[edge] += 1
+    return counts
 
 
 def expanded_nodes(expanded_edges: Iterable[Tuple[str, str, float, Tuple[str, str]]]) -> List[str]:

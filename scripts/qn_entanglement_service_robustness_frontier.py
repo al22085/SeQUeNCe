@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -22,6 +23,9 @@ from scripts.qn_topologies import (
     subdivide_edges,
     shortest_path_edges,
     pick_upgrade_edges,
+    build_topology_from_dist_map,
+    edge_usage_counts_for_pairs,
+    orig_edges_in_path,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
@@ -41,6 +45,12 @@ def parse_args():
     p.add_argument("--pairs", type=str, default="", help="Comma list like 1-2,3-7")
     p.add_argument("--etas", type=str, default="0.5,0.9")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
+    p.add_argument(
+        "--upgrade-policy",
+        choices=["global_rank", "pair_demand", "pair_path_only"],
+        default="global_rank",
+        help="How to choose upgraded edges.",
+    )
     p.add_argument("--strategies", type=str, default="BK,EQT")
     p.add_argument("--targets", type=str, default="0.9,0.99,0.999")
     p.add_argument("--kbits-list", type=str, default="0.5,1.0")
@@ -77,12 +87,15 @@ def parse_args():
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="sequential")
+    p.add_argument("--topology-id", type=str, default="nsfnet")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_robustness"))
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.workers < 2 or args.workers > 4:
+        raise SystemExit("workers must be between 2 and 4")
     pairs: List[Tuple[str, str]] = []
     if args.pairs_csv:
         with args.pairs_csv.open() as f:
@@ -108,6 +121,10 @@ def main():
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
     expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
 
+    topo = nsfnet_topology()
+    if args.edge_distance_csv:
+        topo = build_topology_from_dist_map(dist_map)
+
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
         attempt_rate_sc_hz=args.attempt_rate_sc_hz,
@@ -120,16 +137,25 @@ def main():
         swap_latency_s=args.swap_latency_s,
     )
 
-    topo = nsfnet_topology()
-    upgrade_edges_cache = {uk: set(pick_upgrade_edges(topo, "shortestpath_count", uk)) for uk in upgrade_ks}
+    upgrade_edges_cache = {}
+    if args.upgrade_policy == "global_rank":
+        upgrade_edges_cache = {uk: set(pick_upgrade_edges(topo, "shortestpath_count", uk)) for uk in upgrade_ks}
+    elif args.upgrade_policy == "pair_demand":
+        counts = edge_usage_counts_for_pairs(expanded_edges, pairs)
+        ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        for uk in upgrade_ks:
+            upgrade_edges_cache[uk] = set([e for e, _ in ranked[:uk]])
 
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     raw_path = out_dir / "robust_frontier_raw.csv"
     pair_path = out_dir / "robust_frontier_pairs.csv"
     agg_path = out_dir / "robust_frontier_agg.csv"
+    summary_path = out_dir / "summary.json"
 
     raw_headers = [
+        "topology_id",
+        "upgrade_policy",
         "pair",
         "eta",
         "strategy",
@@ -157,7 +183,11 @@ def main():
 
     def eval_task(task):
         pair, path_edges, eta_val, uk, strat, kb = task
-        upgraded_edges = upgrade_edges_cache[uk]
+        if args.upgrade_policy == "pair_path_only":
+            path_orig_edges = orig_edges_in_path(path_edges)
+            upgraded_edges = set(path_orig_edges[:uk])
+        else:
+            upgraded_edges = upgrade_edges_cache.get(uk, set())
         p_bsm, swap_lat = swap_params_for_strategy(strat, knobs)
         def evaluate_load(load: float) -> float:
             avails = []
@@ -239,6 +269,8 @@ def main():
                     frontier = low
                 frontier_rows.append(
                     {
+                        "topology_id": args.topology_id,
+                        "upgrade_policy": args.upgrade_policy,
                         "pair": f"{pair[0]}-{pair[1]}",
                         "eta": eta_val,
                         "strategy": strat,
@@ -259,6 +291,8 @@ def main():
                         frontier = load
                 frontier_rows.append(
                     {
+                        "topology_id": args.topology_id,
+                        "upgrade_policy": args.upgrade_policy,
                         "pair": f"{pair[0]}-{pair[1]}",
                         "eta": eta_val,
                         "strategy": strat,
@@ -294,17 +328,21 @@ def main():
         writer.writerow(raw_headers)
         for pair, eta_val, strat, uk, kb, load_rows, frontier_rows in results:
             for load, mean_av, std_av, runs in load_rows:
-                writer.writerow([
-                    f"{pair[0]}-{pair[1]}",
-                    eta_val,
-                    strat,
-                    uk,
-                    kb,
-                    load,
-                    mean_av,
-                    std_av,
-                    runs,
-                ])
+                writer.writerow(
+                    [
+                        args.topology_id,
+                        args.upgrade_policy,
+                        f"{pair[0]}-{pair[1]}",
+                        eta_val,
+                        strat,
+                        uk,
+                        kb,
+                        load,
+                        mean_av,
+                        std_av,
+                        runs,
+                    ]
+                )
 
     pair_rows = []
     for _, _, _, _, _, _, frontier_rows in results:
@@ -312,7 +350,17 @@ def main():
     with pair_path.open("w", newline="") as f_pair:
         writer = csv.DictWriter(
             f_pair,
-            fieldnames=["pair", "eta", "strategy", "upgrade_k", "kbits", "target", "frontier_load"],
+            fieldnames=[
+                "topology_id",
+                "upgrade_policy",
+                "pair",
+                "eta",
+                "strategy",
+                "upgrade_k",
+                "kbits",
+                "target",
+                "frontier_load",
+            ],
         )
         writer.writeheader()
         writer.writerows(pair_rows)
@@ -337,6 +385,8 @@ def main():
                             continue
                         agg_rows.append(
                             {
+                                "topology_id": args.topology_id,
+                                "upgrade_policy": args.upgrade_policy,
                                 "eta": eta_val,
                                 "strategy": strat,
                                 "upgrade_k": uk,
@@ -355,6 +405,8 @@ def main():
             f_agg,
             fieldnames=
             [
+                "topology_id",
+                "upgrade_policy",
                 "eta",
                 "strategy",
                 "upgrade_k",
@@ -369,6 +421,23 @@ def main():
         )
         writer.writeheader()
         writer.writerows(agg_rows)
+
+    summary = {
+        "topology_id": args.topology_id,
+        "upgrade_policy": args.upgrade_policy,
+        "distance_dataset_id": args.distance_dataset_id,
+        "pairs": [f"{p[0]}-{p[1]}" for p in pairs],
+        "eta_list": etas,
+        "upgrade_k_list": upgrade_ks,
+        "targets": targets,
+        "kbits_list": kbits_list,
+        "load_grid": load_grid,
+        "binary_search": args.binary_search,
+        "load_min": args.load_min,
+        "load_max": args.load_max,
+        "load_tol": args.load_tol,
+    }
+    summary_path.write_text(json.dumps(summary, indent=2))
 
     print(f"Wrote raw to {raw_path}")
     print(f"Wrote pair frontiers to {pair_path}")

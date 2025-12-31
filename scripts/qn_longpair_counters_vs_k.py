@@ -22,6 +22,9 @@ from scripts.qn_topologies import (
     shortest_path_edges,
     nsfnet_topology,
     pick_upgrade_edges,
+    build_topology_from_dist_map,
+    edge_usage_counts_for_pairs,
+    orig_edges_in_path,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
@@ -33,6 +36,12 @@ def parse_args():
     p.add_argument("--dst", type=str, default="6")
     p.add_argument("--etas", type=str, default="0.9")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
+    p.add_argument(
+        "--upgrade-policy",
+        choices=["global_rank", "pair_demand", "pair_path_only"],
+        default="global_rank",
+    )
+    p.add_argument("--pairs-csv", type=Path, default=None, help="Pairs CSV for pair_demand policy.")
     p.add_argument("--strategies", type=str, default="BK,EQT")
     p.add_argument("--seeds", type=str, default="0,1,2,3")
     p.add_argument("--loads", type=str, default="0.01")
@@ -53,7 +62,6 @@ def parse_args():
     p.add_argument("--otp-directions", type=int, default=1)
     p.add_argument("--key-bits-per-pair", type=float, default=1.0)
     p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="balanced")
-    p.add_argument("--upgrade-policy", type=str, default="shortestpath_count")
     p.add_argument("--out-dir", type=Path, default=Path("out/upgrade_threshold_analysis"))
     p.add_argument("--workers", type=int, default=4)
     return p.parse_args()
@@ -65,6 +73,8 @@ def parse_list(raw: str, cast=float) -> List:
 
 def main():
     args = parse_args()
+    if args.workers < 2 or args.workers > 4:
+        raise SystemExit("workers must be between 2 and 4")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     etas = parse_list(args.etas, float)
     upgrade_ks = parse_list(args.upgrade_k_list, int)
@@ -81,7 +91,24 @@ def main():
         raise SystemExit(f"No path between {args.src} and {args.dst}")
 
     topo = nsfnet_topology()
-    upgrade_edges_cache = {k: set(pick_upgrade_edges(topo, args.upgrade_policy, k)) for k in upgrade_ks}
+    if args.edge_distance_csv:
+        topo = build_topology_from_dist_map(dist_map)
+    upgrade_edges_cache = {}
+    if args.upgrade_policy == "global_rank":
+        upgrade_edges_cache = {k: set(pick_upgrade_edges(topo, "shortestpath_count", k)) for k in upgrade_ks}
+    elif args.upgrade_policy == "pair_demand":
+        pair_list = []
+        if args.pairs_csv and args.pairs_csv.exists():
+            with args.pairs_csv.open() as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    pair_list.append((row["src"], row["dst"]))
+        if not pair_list:
+            pair_list = [(args.src, args.dst)]
+        counts = edge_usage_counts_for_pairs(expanded_edges, pair_list)
+        ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        for k in upgrade_ks:
+            upgrade_edges_cache[k] = set([e for e, _ in ranked[:k]])
 
     knobs = StrategyKnobs(
         attempt_rate_opt_hz=args.attempt_rate_opt_hz,
@@ -99,7 +126,11 @@ def main():
             for strat in strategies:
                 ks = [0] if strat == "BK" else upgrade_ks
                 for k in ks:
-                    upgraded_edges = upgrade_edges_cache[k]
+                    if args.upgrade_policy == "pair_path_only":
+                        path_orig_edges = orig_edges_in_path(path_edges)
+                        upgraded_edges = set(path_orig_edges[:k])
+                    else:
+                        upgraded_edges = upgrade_edges_cache.get(k, set())
                     p_bsm, swap_lat = swap_params_for_strategy(strat, knobs)
                     for seed in seeds:
                         edge_params: Dict[Tuple[str, str], EdgeParams] = {}
@@ -143,6 +174,7 @@ def main():
                                 "src": args.src,
                                 "dst": args.dst,
                                 "eta": eta_val,
+                                "upgrade_policy": args.upgrade_policy,
                                 "strategy": strat,
                                 "upgrade_k": k,
                                 "load": load,
@@ -165,6 +197,7 @@ def main():
                 "src",
                 "dst",
                 "eta",
+                "upgrade_policy",
                 "strategy",
                 "upgrade_k",
                 "load",
@@ -200,6 +233,7 @@ def main():
                     summary_rows.append(
                         {
                             "eta": eta_val,
+                            "upgrade_policy": args.upgrade_policy,
                             "strategy": strat,
                             "upgrade_k": k,
                             "load": load,
