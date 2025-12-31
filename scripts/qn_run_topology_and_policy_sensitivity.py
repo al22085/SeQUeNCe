@@ -15,9 +15,12 @@ import numpy as np
 
 def parse_args():
     p = argparse.ArgumentParser(description="Run topology/policy sensitivity for upgrade-k curves.")
-    p.add_argument("--edge-csv-list", type=str, required=True, help="Comma list of edge CSVs")
+    p.add_argument("--edge-csv-list", type=str, default="", help="Comma list of edge CSVs")
     p.add_argument("--topology-id-list", type=str, default="", help="Comma list of topology ids (optional)")
     p.add_argument("--pairs-csv-list", type=str, default="", help="Comma list of pairs CSVs (optional)")
+    p.add_argument("--topologybench-xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
+    p.add_argument("--topologybench-zip", type=Path, default=None, help="Path to real_topologies.zip")
+    p.add_argument("--auto-select-topologies", type=int, default=0, help="Auto-select K topologies from TopologyBench")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
     p.add_argument("--targets", type=str, default="0.99")
@@ -59,10 +62,65 @@ def main():
         raise SystemExit("workers must be between 2 and 4")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)]
+    edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)] if args.edge_csv_list else []
     topo_ids = parse_list(args.topology_id_list) if args.topology_id_list else []
     pairs_csvs = parse_list(args.pairs_csv_list) if args.pairs_csv_list else []
     policies = parse_list(args.upgrade_policies)
+
+    if not edge_csvs:
+        # auto-select topologies from TopologyBench
+        if not args.topologybench_xlsx_dir and not args.topologybench_zip:
+            raise SystemExit("Provide --edge-csv-list or TopologyBench source (--topologybench-xlsx-dir/--topologybench-zip)")
+        list_csv = args.out_dir / "topologybench_list.csv"
+        list_cmd = [
+            "python",
+            "scripts/qn_list_topologybench.py",
+            "--out-csv",
+            str(list_csv),
+        ]
+        if args.topologybench_xlsx_dir:
+            list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
+        else:
+            list_cmd += ["--zip", str(args.topologybench_zip)]
+        run_cmd(list_cmd)
+
+        if args.auto_select_topologies <= 0:
+            raise SystemExit("Provide --auto-select-topologies when using TopologyBench sources")
+        selected_csv = args.out_dir / "topologybench_selected.csv"
+        run_cmd(
+            [
+                "python",
+                "scripts/qn_select_diverse_topologies.py",
+                "--list-csv",
+                str(list_csv),
+                "--k",
+                str(args.auto_select_topologies),
+                "--out-csv",
+                str(selected_csv),
+            ]
+        )
+        # import distances for each selected topology
+        with selected_csv.open() as f:
+            selected = list(csv.DictReader(f))
+        for row in selected:
+            topo_id = row["topology_id"]
+            out_csv = Path("data/topologybench") / f"{topo_id}_distances.csv"
+            if not out_csv.exists():
+                import_cmd = [
+                    "python",
+                    "scripts/qn_import_distances_from_topologybench_generic.py",
+                    "--topology-id",
+                    topo_id,
+                    "--out-dir",
+                    "data/topologybench",
+                ]
+                if args.topologybench_xlsx_dir:
+                    import_cmd += ["--xlsx", str(args.topologybench_xlsx_dir / f"TOP_75_{topo_id}.xlsx")]
+                else:
+                    import_cmd += ["--zip", str(args.topologybench_zip)]
+                run_cmd(import_cmd)
+            edge_csvs.append(out_csv)
+            topo_ids.append(topo_id)
 
     if topo_ids and len(topo_ids) != len(edge_csvs):
         raise SystemExit("topology-id-list length must match edge-csv-list")
