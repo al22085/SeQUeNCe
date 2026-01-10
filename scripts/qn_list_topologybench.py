@@ -27,13 +27,14 @@ def parse_args():
     )
     p.add_argument("--xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
     p.add_argument("--zip", type=Path, default=None, help="Path to real_topologies.zip")
+    p.add_argument("--topologybench-zip", type=Path, default=None, help="Alias for --zip.")
     p.add_argument("--out-csv", type=Path, default=None)
     p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
     return p.parse_args()
 
 
-def read_xlsx_rows(xlsx_path: Path):
+def read_xlsx_rows(xlsx_path: Path, prefer_sheet_contains: list[str] | None = None):
     with zipfile.ZipFile(xlsx_path) as zf:
         shared_strings = []
         if "xl/sharedStrings.xml" in zf.namelist():
@@ -41,10 +42,37 @@ def read_xlsx_rows(xlsx_path: Path):
             for si in root.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
                 t = si.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
                 shared_strings.append(t.text if t is not None else "")
-        sheet_name = "xl/worksheets/sheet1.xml"
-        if sheet_name not in zf.namelist():
-            sheet_name = [n for n in zf.namelist() if n.startswith("xl/worksheets/sheet")][0]
-        root = ElementTree.fromstring(zf.read(sheet_name))
+        sheet_path = None
+        try:
+            wb = ElementTree.fromstring(zf.read("xl/workbook.xml"))
+            rels = ElementTree.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+            rid_to_target = {}
+            for r in rels.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+                target = r.attrib["Target"].lstrip("/")
+                if not target.startswith("xl/"):
+                    target = "xl/" + target
+                rid_to_target[r.attrib["Id"]] = target
+            sheets = []
+            for s in wb.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheets/"
+                                "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"):
+                name = s.attrib.get("name", "")
+                rid = s.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                sheets.append((name, rid_to_target.get(rid, "")))
+
+            if prefer_sheet_contains:
+                for name, path in sheets:
+                    lname = name.lower()
+                    if any(token.lower() in lname for token in prefer_sheet_contains):
+                        sheet_path = path
+                        break
+            if not sheet_path:
+                sheet_path = sheets[0][1] if sheets else "xl/worksheets/sheet1.xml"
+        except KeyError:
+            sheet_path = "xl/worksheets/sheet1.xml"
+        if sheet_path not in zf.namelist():
+            sheet_path = [n for n in zf.namelist() if n.startswith("xl/worksheets/sheet")][0]
+
+        root = ElementTree.fromstring(zf.read(sheet_path))
         rows = []
         for row in root.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
             vals = []
@@ -64,31 +92,39 @@ def read_xlsx_rows(xlsx_path: Path):
 
 
 def parse_edges(xlsx_path: Path):
-    rows = read_xlsx_rows(xlsx_path)
+    rows = read_xlsx_rows(xlsx_path, prefer_sheet_contains=["edges", "links"])
     if not rows:
         return [], []
-    header = [h.lower() for h in rows[0]]
-    try:
-        u_idx = header.index("source")
-        v_idx = header.index("destination")
-    except ValueError:
-        try:
-            u_idx = header.index("u")
-            v_idx = header.index("v")
-        except ValueError:
-            raise SystemExit("Expected columns source/destination (or u/v)")
-    try:
-        d_idx = header.index("linklengthinkm")
-    except ValueError:
-        try:
-            d_idx = header.index("distance_km")
-        except ValueError:
-            raise SystemExit("Expected distance column (linkLengthInKm or distance_km)")
+    def match_idx(row, keys):
+        for i, val in enumerate(row):
+            v = str(val).strip().lower()
+            for k in keys:
+                if v == k or k in v:
+                    return i
+        return None
+
+    u_idx = v_idx = d_idx = None
+    header_row_idx = None
+    for idx, row in enumerate(rows):
+        u_idx = match_idx(row, ["source", "src", "u", "node1", "from"])
+        v_idx = match_idx(row, ["destination", "dst", "v", "node2", "to"])
+        d_idx = match_idx(row, ["linklengthinkm", "distance_km", "length_km", "linklength", "distance"])
+        if u_idx is not None and v_idx is not None and d_idx is not None:
+            header_row_idx = idx
+            break
+    if header_row_idx is None:
+        for idx, row in enumerate(rows):
+            if len([x for x in row if str(x).strip()]) >= 4:
+                header_row_idx = idx - 1 if idx > 0 else -1
+                u_idx, v_idx, d_idx = 1, 2, 3
+                break
+        if header_row_idx is None:
+            raise SystemExit("Expected columns source/destination (or u/v) and distance in XLSX")
 
     edges = []
     nodes = set()
     seen = set()
-    for r in rows[1:]:
+    for r in rows[header_row_idx + 1:]:
         if len(r) <= max(u_idx, v_idx, d_idx):
             continue
         u, v = str(r[u_idx]), str(r[v_idx])
@@ -164,6 +200,8 @@ def topology_id_from_path(path: Path) -> str:
 
 def main():
     args = parse_args()
+    if args.topologybench_zip and args.zip is None:
+        args.zip = args.topologybench_zip
     rows = []
     for xlsx in list_xlsx_paths(args):
         topo_id = topology_id_from_path(xlsx)

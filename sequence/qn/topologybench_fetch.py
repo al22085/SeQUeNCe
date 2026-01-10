@@ -59,7 +59,17 @@ def ensure_topologybench_zip(
     if target_zip.exists():
         checksum = md5sum(target_zip)
         if checksum != manifest["md5"]:
-            raise ValueError(f"TopologyBench md5 mismatch: expected {manifest['md5']} got {checksum}")
+            if no_download:
+                raise ValueError(
+                    "TopologyBench zip checksum mismatch and downloads are disabled. "
+                    "Place the correct zip at data/topologybench/real_topologies.zip "
+                    f"(md5={manifest['md5']}) or enable network."
+                )
+            target_zip.unlink(missing_ok=True)
+        else:
+            return target_zip
+    if target_zip.exists():
+        return target_zip
         return target_zip
 
     if no_download:
@@ -70,9 +80,18 @@ def ensure_topologybench_zip(
     record_id = os.getenv("TOPBENCH_RECORD_ID", manifest["record_id"])
     filename = manifest["filename"]
     url = f"https://zenodo.org/records/{record_id}/files/{filename}?download=1"
-    urllib.request.urlretrieve(url, target_zip)
+    try:
+        urllib.request.urlretrieve(url, target_zip)
+    except Exception as exc:
+        raise RuntimeError(
+            "TopologyBench zip missing. Place it at data/topologybench/real_topologies.zip "
+            f"and ensure md5={manifest['md5']}, or enable network."
+        ) from exc
     checksum = md5sum(target_zip)
     if checksum != manifest["md5"]:
         target_zip.unlink(missing_ok=True)
-        raise ValueError(f"TopologyBench md5 mismatch: expected {manifest['md5']} got {checksum}")
+        raise ValueError(
+            "TopologyBench md5 mismatch after download. "
+            f"Expected {manifest['md5']}."
+        )
     return target_zip
