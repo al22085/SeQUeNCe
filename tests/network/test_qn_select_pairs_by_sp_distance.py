@@ -26,6 +26,8 @@ def test_select_pairs_by_sp_distance(tmp_path: Path):
             "toy",
             "--targets-km",
             "100,200,300",
+            "--pairs-per-target",
+            "2",
             "--out-csv",
             str(out_csv),
         ],
@@ -34,9 +36,10 @@ def test_select_pairs_by_sp_distance(tmp_path: Path):
 
     with out_csv.open() as f:
         rows = list(csv.DictReader(f))
-    assert len(rows) == 3
+    assert len(rows) == 6
     labels = [r["label"] for r in rows]
-    assert labels == ["short", "medium", "long"]
-    assert (rows[0]["src_node"], rows[0]["dst_node"], rows[0]["sp_km"]) == ("1", "2", "100.0")
-    assert (rows[1]["src_node"], rows[1]["dst_node"], rows[1]["sp_km"]) == ("1", "3", "200.0")
-    assert (rows[2]["src_node"], rows[2]["dst_node"], rows[2]["sp_km"]) == ("1", "4", "300.0")
+    assert labels[:2] == ["short_1", "short_2"]
+    assert labels[2:4] == ["medium_1", "medium_2"]
+    assert labels[4:6] == ["long_1", "long_2"]
+    pairs = {(r["src_node"], r["dst_node"]) for r in rows}
+    assert len(pairs) == len(rows)

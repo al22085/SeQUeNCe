@@ -225,6 +225,11 @@ def main():
     for topo_id, edge_csv in zip(topo_ids, edge_csvs):
         # compute per-topology Kmax from original edges
         dist_map = load_edge_distances_csv(edge_csv)
+        nodes = set()
+        for u, v in dist_map.keys():
+            nodes.add(u)
+            nodes.add(v)
+        node_count = len(nodes)
         kmax = len(dist_map)
         if kmax <= 0:
             raise SystemExit(f"No edges found in {edge_csv}")
@@ -238,6 +243,7 @@ def main():
             json.dumps(
                 {
                     "topology_id": topo_id,
+                    "node_count_original": node_count,
                     "edge_count_original": kmax,
                     "kmax": kmax,
                     "upgrade_k_mode": args.upgrade_k_mode,
@@ -345,6 +351,8 @@ def main():
                             str(pair_frontier),
                             "--out-csv",
                             str(curve_csv),
+                            "--pairs-csv",
+                            str(pairs_csv),
                             "--curve-points-csv",
                             str(curve_points),
                             "--curve-metrics-csv",
@@ -359,6 +367,10 @@ def main():
                             ",".join(str(k) for k in upgrade_ks),
                             "--load-max",
                             str(load_max),
+                            "--topology-id",
+                            topo_id,
+                            "--upgrade-policy",
+                            policy,
                         ]
                     )
                     metrics_rows = load_csv(curve_metrics)

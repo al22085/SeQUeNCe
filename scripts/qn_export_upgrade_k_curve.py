@@ -14,6 +14,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Export upgrade-k frontier curvature metrics.")
     p.add_argument("--pair-frontier", type=Path, required=True, help="robust_frontier_pairs.csv from robustness run")
     p.add_argument("--out-csv", type=Path, required=True, help="Where to write upgrade_k_curve_numbers.csv")
+    p.add_argument("--pairs-csv", type=Path, default=None, help="Pairs CSV to annotate labels/distances.")
     p.add_argument("--base-strategy", type=str, default="BK")
     p.add_argument("--curve-strategy", type=str, default="EQT")
     p.add_argument("--target", type=float, default=0.9)
@@ -23,6 +24,8 @@ def parse_args():
     p.add_argument("--load-max", type=float, default=None, help="Optional load_max used in frontier search for clipping flag.")
     p.add_argument("--curve-points-csv", type=Path, default=None, help="Optional curve_points.csv output path.")
     p.add_argument("--curve-metrics-csv", type=Path, default=None, help="Optional curve_metrics.csv output path.")
+    p.add_argument("--topology-id", type=str, default="")
+    p.add_argument("--upgrade-policy", type=str, default="")
     p.add_argument("--r2-threshold", type=float, default=0.98)
     p.add_argument("--curvature-threshold", type=float, default=0.01)
     return p.parse_args()
@@ -33,9 +36,27 @@ def load_rows(path: Path) -> List[Dict]:
         return list(csv.DictReader(f))
 
 
+def load_pair_meta(path: Path | None) -> Dict[str, Dict[str, str]]:
+    if not path:
+        return {}
+    with path.open() as f:
+        rows = list(csv.DictReader(f))
+    meta = {}
+    for r in rows:
+        src = r.get("src_node") or r.get("src") or r.get("src_id")
+        dst = r.get("dst_node") or r.get("dst") or r.get("dst_id")
+        if not src or not dst:
+            continue
+        key = f"{src}-{dst}"
+        meta[key] = r
+        meta[f"{dst}-{src}"] = r
+    return meta
+
+
 def main():
     args = parse_args()
     rows = load_rows(args.pair_frontier)
+    pair_meta = load_pair_meta(args.pairs_csv)
     ks = [int(x) for x in args.upgrade_ks.split(",") if x]
     ks_sorted = sorted(ks)
     if not ks_sorted:
@@ -75,6 +96,7 @@ def main():
         if not curve:
             continue
         bk0, eqt_frontiers = curve
+        meta = pair_meta.get(f"{pair[0]}-{pair[1]}", {})
         ratios = {k: (eqt_frontiers[k] / bk0 if bk0 > 0 else 0.0) for k in ks_sorted}
         base_k = ks_sorted[0]
         def frontier_at(k: int) -> float:
@@ -91,7 +113,13 @@ def main():
             frac = k / kmax if kmax > 0 else 0.0
             curve_points.append(
                 {
+                    "topology_id": args.topology_id,
+                    "upgrade_policy": args.upgrade_policy,
                     "pair": f"{pair[0]}-{pair[1]}",
+                    "label": meta.get("label", ""),
+                    "target_km": meta.get("target_km", ""),
+                    "sp_km": meta.get("sp_km", ""),
+                    "abs_error_km": meta.get("abs_error_km", ""),
                     "upgrade_k": k,
                     "upgraded_fraction": frac,
                     "bk0": bk0,
@@ -118,7 +146,13 @@ def main():
         classification = "approximately_linear" if (r2 >= args.r2_threshold and curvature <= args.curvature_threshold) else "nonlinear"
         metrics_rows.append(
             {
+                "topology_id": args.topology_id,
+                "upgrade_policy": args.upgrade_policy,
                 "pair": f"{pair[0]}-{pair[1]}",
+                "label": meta.get("label", ""),
+                "target_km": meta.get("target_km", ""),
+                "sp_km": meta.get("sp_km", ""),
+                "abs_error_km": meta.get("abs_error_km", ""),
                 "kmax": kmax,
                 "r2": r2,
                 "curvature": curvature,
@@ -166,7 +200,13 @@ def main():
                 frac = k / kmax if kmax > 0 else 0.0
                 curve_points.append(
                     {
+                        "topology_id": args.topology_id,
+                        "upgrade_policy": args.upgrade_policy,
                         "pair": agg_name,
+                        "label": agg_name,
+                        "target_km": "",
+                        "sp_km": "",
+                        "abs_error_km": "",
                         "upgrade_k": k,
                         "upgraded_fraction": frac,
                         "bk0": float(func([r["bk0"] for r in results])),
@@ -192,7 +232,13 @@ def main():
             classification = "approximately_linear" if (r2 >= args.r2_threshold and curvature <= args.curvature_threshold) else "nonlinear"
             metrics_rows.append(
                 {
+                    "topology_id": args.topology_id,
+                    "upgrade_policy": args.upgrade_policy,
                     "pair": agg_name,
+                    "label": agg_name,
+                    "target_km": "",
+                    "sp_km": "",
+                    "abs_error_km": "",
                     "kmax": kmax,
                     "r2": r2,
                     "curvature": curvature,
@@ -232,7 +278,20 @@ def main():
         with args.curve_points_csv.open("w", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["pair", "upgrade_k", "upgraded_fraction", "bk0", "eqt_frontier", "ratio_vs_bk0"],
+                fieldnames=[
+                    "topology_id",
+                    "upgrade_policy",
+                    "pair",
+                    "label",
+                    "target_km",
+                    "sp_km",
+                    "abs_error_km",
+                    "upgrade_k",
+                    "upgraded_fraction",
+                    "bk0",
+                    "eqt_frontier",
+                    "ratio_vs_bk0",
+                ],
             )
             writer.writeheader()
             writer.writerows(curve_points)
@@ -243,7 +302,21 @@ def main():
         with args.curve_metrics_csv.open("w", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["pair", "kmax", "r2", "curvature", "classification", "ratio_k21", "clipped"],
+                fieldnames=[
+                    "topology_id",
+                    "upgrade_policy",
+                    "pair",
+                    "label",
+                    "target_km",
+                    "sp_km",
+                    "abs_error_km",
+                    "kmax",
+                    "r2",
+                    "curvature",
+                    "classification",
+                    "ratio_k21",
+                    "clipped",
+                ],
             )
             writer.writeheader()
             writer.writerows(metrics_rows)

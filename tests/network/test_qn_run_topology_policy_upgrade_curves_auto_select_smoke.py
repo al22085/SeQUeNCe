@@ -152,5 +152,6 @@ def test_auto_select_with_fake_zip_smoke():
         data = json.loads(kjson.read_text())
         assert data["kmax"] == 3
         assert data["upgrade_k_count"] == 4
+        assert data["node_count_original"] == 3
         if real_md5:
             assert _md5(real_zip) == real_md5

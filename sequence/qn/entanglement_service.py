@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
@@ -113,7 +114,7 @@ def simulate_entanglement_service(
         heapq.heappush(event_heap, (req.t_arrival, "req", req))
 
     # per-edge entangled pair expiry times
-    edge_pairs: Dict[Tuple[str, str], List[float]] = {e: [] for e in edges}
+    edge_pairs: Dict[Tuple[str, str], deque[float]] = {e: deque() for e in edges}
 
     key_bits_available = 0.0
     pending: List[Request] = []
@@ -122,8 +123,9 @@ def simulate_entanglement_service(
 
     def clean_expired(t_now: float):
         for e in edges:
-            ep = edge_params[e]
-            edge_pairs[e] = [exp for exp in edge_pairs[e] if exp > t_now and exp - t_now <= ep.coherence_time_s + 1e-12]
+            dq = edge_pairs[e]
+            while dq and dq[0] <= t_now:
+                dq.popleft()
 
     def try_swap(t_now: float):
         nonlocal key_bits_available, ab_pairs
@@ -134,11 +136,11 @@ def simulate_entanglement_service(
             ready_pairs: List[Tuple[float, str, str]] = []
             for e in edges:
                 while edge_pairs[e] and edge_pairs[e][0] <= t_now:
-                    edge_pairs[e].pop(0)
+                    edge_pairs[e].popleft()
                     stats["mem_expired_events"] += 1
                 if not edge_pairs[e]:
                     return
-                exp = edge_pairs[e].pop(0)
+                exp = edge_pairs[e].popleft()
                 ready_pairs.append((exp, e[0], e[1]))
 
             # perform level-by-level disjoint swaps
@@ -184,7 +186,7 @@ def simulate_entanglement_service(
                 pairs = []
                 ok = True
                 for e in edges:
-                    exp = edge_pairs[e].pop(0)
+                    exp = edge_pairs[e].popleft()
                     if exp <= t_now:
                         ok = False
                         break
@@ -232,7 +234,6 @@ def simulate_entanglement_service(
                     heapq.heappush(event_heap, (next_t, "eg_success", edge))
             available_t = now + params.extra_latency_s
             edge_pairs[edge].append(available_t + params.coherence_time_s)
-            edge_pairs[edge].sort()
             try_swap(available_t + swap_params.latency_s)
         elif kind == "req":
             req = payload

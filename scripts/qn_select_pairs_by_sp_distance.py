@@ -77,9 +77,11 @@ def main():
             err = abs(sp_km - target)
             candidates.append((err, sp_km, s, t))
         candidates.sort(key=lambda x: (x[0], x[2], x[3]))
-        for c in candidates[: args.pairs_per_target]:
+        label_base = labels[idx] if idx < len(labels) else f"target_{target}"
+        for pick_idx, c in enumerate(candidates[: args.pairs_per_target], start=1):
             used.add((c[2], c[3]))
-            selected.append((labels[idx] if idx < len(labels) else f"target_{target}", c[2], c[3], c[1], target, c[0]))
+            label = label_base if args.pairs_per_target == 1 else f"{label_base}_{pick_idx}"
+            selected.append((label, c[2], c[3], c[1], target, c[0]))
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="") as f:
