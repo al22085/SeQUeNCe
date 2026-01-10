@@ -69,6 +69,8 @@ def load_edge_distances_csv(path: Path):
                 d = float(row["distance_m"])
             elif "distance_km" in row:
                 d = float(row["distance_km"]) * 1000.0
+            elif "linkLengthInKm" in row:
+                d = float(row["linkLengthInKm"]) * 1000.0
             else:
                 raise KeyError("distance_m or distance_km column required")
             dist[tuple(sorted((u, v)))] = d

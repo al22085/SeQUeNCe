@@ -9,18 +9,33 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from sequence.qn.topologybench_fetch import ensure_topologybench_zip
+
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Convert TopologyBench topology distances to CSV.")
+    p = argparse.ArgumentParser(
+        description=(
+            "Convert TopologyBench topology distances to CSV. "
+            "Defaults to pinned manifest download into ./data/topologybench/."
+        )
+    )
     p.add_argument("--xlsx", type=Path, default=None, help="Path to TOP_75_*.xlsx")
-    p.add_argument("--zip", type=Path, default=None, help="Path to real_topologies.zip")
+    p.add_argument("--zip", type=Path, default=None, help="Path to real_topologies.zip (will be copied into ./data/).")
     p.add_argument("--topology-id", type=str, required=True, help="Topology id (e.g., NSFNET13)")
     p.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("data/topologybench"),
+        default=Path("data/topologybench_distances"),
         help="Output directory for distances + provenance",
     )
+    p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
+    p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
     return p.parse_args()
 
 
@@ -70,8 +85,13 @@ def find_xlsx_in_zip(zip_path: Path, topology_id: str) -> Path:
 
 def main():
     args = parse_args()
-    if not args.xlsx and not args.zip:
-        raise SystemExit("Provide --xlsx or --zip")
+    if not args.xlsx:
+        args.zip = ensure_topologybench_zip(
+            manifest_path=args.manifest,
+            zip_path=args.zip,
+            no_download=args.no_download,
+            copy_into_data=True,
+        )
     xlsx = args.xlsx
     if xlsx is None:
         xlsx = find_xlsx_in_zip(args.zip, args.topology_id)
@@ -117,7 +137,7 @@ def main():
 
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = out_dir / f"{args.topology_id}_distances.csv"
+    out_csv = out_dir / f"{args.topology_id}.csv"
     out_md = out_dir / f"{args.topology_id}_provenance.md"
 
     with out_csv.open("w", newline="") as f:

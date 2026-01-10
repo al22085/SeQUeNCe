@@ -14,7 +14,12 @@ import numpy as np
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Run topology/policy sensitivity for upgrade-k curves.")
+    p = argparse.ArgumentParser(
+        description=(
+            "Run topology/policy sensitivity for upgrade-k curves. "
+            "Defaults to SLA Tier2 (A=0.99) and pinned TopologyBench manifest."
+        )
+    )
     p.add_argument("--edge-csv-list", type=str, default="", help="Comma list of edge CSVs")
     p.add_argument("--topology-id-list", type=str, default="", help="Comma list of topology ids (optional)")
     p.add_argument("--pairs-csv-list", type=str, default="", help="Comma list of pairs CSVs (optional)")
@@ -104,7 +109,7 @@ def main():
             selected = list(csv.DictReader(f))
         for row in selected:
             topo_id = row["topology_id"]
-            out_csv = Path("data/topologybench") / f"{topo_id}_distances.csv"
+            out_csv = Path("data/topologybench_distances") / f"{topo_id}.csv"
             if not out_csv.exists():
                 import_cmd = [
                     "python",
@@ -112,7 +117,7 @@ def main():
                     "--topology-id",
                     topo_id,
                     "--out-dir",
-                    "data/topologybench",
+                    "data/topologybench_distances",
                 ]
                 if args.topologybench_xlsx_dir:
                     import_cmd += ["--xlsx", str(args.topologybench_xlsx_dir / f"TOP_75_{topo_id}.xlsx")]

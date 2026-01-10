@@ -9,12 +9,27 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from sequence.qn.topologybench_fetch import ensure_topologybench_zip
+
 
 def parse_args():
-    p = argparse.ArgumentParser(description="List TopologyBench topologies from XLSX/zip.")
+    p = argparse.ArgumentParser(
+        description=(
+            "List TopologyBench topologies from XLSX/zip. "
+            "Defaults to pinned manifest download into ./data/topologybench/."
+        )
+    )
     p.add_argument("--xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
     p.add_argument("--zip", type=Path, default=None, help="Path to real_topologies.zip")
     p.add_argument("--out-csv", type=Path, default=None)
+    p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
+    p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
     return p.parse_args()
 
 
@@ -124,16 +139,20 @@ def list_xlsx_paths(args):
     if args.xlsx_dir:
         return sorted([p for p in args.xlsx_dir.glob("*.xlsx")])
     if args.zip:
+        args.zip = ensure_topologybench_zip(manifest_path=args.manifest, zip_path=args.zip, no_download=args.no_download)
         with zipfile.ZipFile(args.zip) as zf:
             names = [n for n in zf.namelist() if n.endswith(".xlsx")]
-        # extract to temp dir under zip parent
+        # extract under data/ for reproducibility
         out_dir = args.zip.parent / "_tb_xlsx_extract"
         out_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(args.zip) as zf:
             for name in names:
                 zf.extract(name, out_dir)
         return sorted(out_dir.glob("*.xlsx"))
-    raise SystemExit("Provide --xlsx-dir or --zip")
+    # fall back to pinned manifest
+    zip_path = ensure_topologybench_zip(manifest_path=args.manifest, no_download=args.no_download)
+    args.zip = zip_path
+    return list_xlsx_paths(args)
 
 
 def topology_id_from_path(path: Path) -> str:

@@ -55,7 +55,7 @@ def test_topologybench_generic_import_list_select():
         out_dir = base / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # import both
+        # import one
         subprocess.run(
             [
                 "python",
@@ -70,7 +70,7 @@ def test_topologybench_generic_import_list_select():
             check=True,
             cwd=Path(__file__).resolve().parents[2],
         )
-        csv_path = out_dir / "TOY1_distances.csv"
+        csv_path = out_dir / "TOY1.csv"
         assert csv_path.exists()
 
         # list
