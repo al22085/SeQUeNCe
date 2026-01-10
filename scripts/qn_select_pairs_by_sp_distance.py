@@ -21,6 +21,8 @@ def parse_args():
     p.add_argument("--topology-id", type=str, required=True)
     p.add_argument("--targets-km", type=str, default="404,511,1002")
     p.add_argument("--pairs-per-target", type=int, default=1)
+    p.add_argument("--pair-distance-abs-tol-km", type=float, default=0.0)
+    p.add_argument("--pair-distance-rel-tol", type=float, default=0.15)
     p.add_argument("--out-csv", type=Path, required=True)
     return p.parse_args()
 
@@ -66,27 +68,68 @@ def main():
                 continue
             pairs.append((best[dst] / 1000.0, src, dst))
 
+    def within_tol(sp_km: float, target_km: float) -> bool:
+        abs_err = abs(sp_km - target_km)
+        if args.pair_distance_abs_tol_km and abs_err <= args.pair_distance_abs_tol_km:
+            return True
+        if args.pair_distance_rel_tol and target_km > 0:
+            return abs_err / target_km <= args.pair_distance_rel_tol
+        return False
+
     selected = []
     used = set()
     labels = ["short", "medium", "long"]
     for idx, target in enumerate(targets):
         candidates = []
         for sp_km, s, t in pairs:
-            if (s, t) in used:
+            if not within_tol(sp_km, target):
                 continue
             err = abs(sp_km - target)
-            candidates.append((err, sp_km, s, t))
+            rel_err = err / target if target > 0 else 0.0
+            candidates.append((err, rel_err, sp_km, s, t))
+        if len(candidates) < args.pairs_per_target:
+            raise SystemExit(
+                f"Not enough pairs within tolerance for target {target} km: "
+                f"need {args.pairs_per_target}, have {len(candidates)}"
+            )
         candidates.sort(key=lambda x: (x[0], x[2], x[3]))
         label_base = labels[idx] if idx < len(labels) else f"target_{target}"
-        for pick_idx, c in enumerate(candidates[: args.pairs_per_target], start=1):
-            used.add((c[2], c[3]))
+        # first pass: avoid duplicates across targets
+        picks = []
+        for c in candidates:
+            if (c[3], c[4]) in used:
+                continue
+            picks.append(c)
+            if len(picks) >= args.pairs_per_target:
+                break
+        # second pass: allow duplicates if needed
+        if len(picks) < args.pairs_per_target:
+            for c in candidates:
+                if c in picks:
+                    continue
+                picks.append(c)
+                if len(picks) >= args.pairs_per_target:
+                    break
+        for pick_idx, c in enumerate(picks, start=1):
+            used.add((c[3], c[4]))
             label = label_base if args.pairs_per_target == 1 else f"{label_base}_{pick_idx}"
-            selected.append((label, c[2], c[3], c[1], target, c[0]))
+            selected.append((args.topology_id, label, target, c[3], c[4], c[2], c[0], c[1]))
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["label", "src_node", "dst_node", "sp_km", "target_km", "abs_error_km"])
+        w.writerow(
+            [
+                "topology_id",
+                "label",
+                "target_km",
+                "src_node",
+                "dst_node",
+                "dist_km",
+                "abs_error_km",
+                "rel_error",
+            ]
+        )
         for row in selected:
             w.writerow(row)
     print(f"Wrote {args.out_csv}")

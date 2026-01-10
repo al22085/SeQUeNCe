@@ -74,6 +74,7 @@ def test_auto_select_insufficient_topologies_errors():
             str(manifest_path),
             "--no-download",
             "--no-copy",
+            "--no-verify-parallel",
             "--auto-select-topologies",
             "3",
             "--upgrade-policies",

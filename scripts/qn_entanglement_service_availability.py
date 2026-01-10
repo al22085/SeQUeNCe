@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dst-node", type=str, default="14")
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--preset", type=str, default="")
-    p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service"))
     p.add_argument("--resume", action="store_true")
     return p.parse_args()
@@ -83,6 +83,8 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
     args = apply_preset(args, args.preset)
     seeds = parse_list(args.seeds, int) if args.seeds else [args.seed]
     dist_map = {}

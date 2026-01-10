@@ -60,13 +60,15 @@ def parse_args():
     p.add_argument("--pair-mode", choices=["fixed", "random"], default="fixed")
     p.add_argument("--src-node", type=str, default="1")
     p.add_argument("--dst-node", type=str, default="14")
-    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--workers", type=int, default=2)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_ent_param_scan"))
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
     seeds = parse_list(args.seeds, int)
     att_opt = parse_list(args.attempt_rate_opt_list, float)
     att_sc = parse_list(args.attempt_rate_sc_list, float)

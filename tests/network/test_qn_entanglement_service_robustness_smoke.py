@@ -44,6 +44,8 @@ def test_entanglement_service_robustness_smoke():
                 "50",
                 "--edge-distance-csv",
                 "data/nsfnet_distances_topologybench.csv",
+                "--allow-thread-fallback",
+                "--no-verify-parallel",
                 "--workers",
                 "2",
                 "--out-dir",

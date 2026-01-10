@@ -85,7 +85,7 @@ def parse_args():
     p.add_argument("--otp-data-rate-bps", type=float, default=1e3)
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--otp-directions", type=int, default=2)
-    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--workers", type=int, default=2)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_frontier"))
     p.add_argument("--resume", action="store_true")
     return p.parse_args()
@@ -289,9 +289,9 @@ def main():
                 for tgt in targets:
                     tasks.append((strat, kb, uk, tgt))
 
-    max_workers = min(args.workers, 4)
-    if args.workers > 4:
-        print("Capping workers to 4")
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
+    max_workers = min(args.workers, 10)
     print(f"Using effective_workers={max_workers}")
 
     def run_task(task):
@@ -300,14 +300,10 @@ def main():
         return strat, tgt, kb, uk, frontier, avail, evals
 
     if max_workers > 1:
-        try:
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                fut_map = {ex.submit(run_task, t): t for t in tasks}
-                for fut in as_completed(fut_map):
-                    results.append(fut.result())
-        except PermissionError:
-            for t in tasks:
-                results.append(run_task(t))
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            fut_map = {ex.submit(run_task, t): t for t in tasks}
+            for fut in as_completed(fut_map):
+                results.append(fut.result())
     else:
         for t in tasks:
             results.append(run_task(t))

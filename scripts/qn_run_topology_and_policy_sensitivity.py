@@ -67,8 +67,8 @@ def load_csv(path: Path):
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 4:
-        raise SystemExit("workers must be between 2 and 4")
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)] if args.edge_csv_list else []

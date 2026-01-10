@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -29,6 +30,7 @@ from scripts.qn_topologies import (
     edge_usage_counts,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
+from sequence.qn.parallel import verify_parallelism
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 
 
@@ -38,6 +40,192 @@ def parse_list(raw: str, cast=float) -> List:
 
 def parse_pairs(raw: str) -> List[Tuple[str, str]]:
     return [tuple(p.split("-")) for p in raw.split(",") if p]
+
+
+@dataclass
+class RobustEvalTask:
+    topology_id: str
+    pair: Tuple[str, str]
+    path_edges: List[Tuple[str, str, float, Tuple[str, str]]]
+    eta_val: float
+    upgrade_k: int
+    strategy: str
+    kbits: float
+    upgrade_policy: str
+    upgraded_edges: List[Tuple[str, str]]
+    knobs: StrategyKnobs
+    seeds: List[int]
+    targets: List[float]
+    load_grid: List[float]
+    load_min: float
+    load_max: float
+    load_tol: float
+    binary_search: bool
+    horizon_s: float
+    tau_s: float
+    otp_data_rate_bps: float
+    otp_session_duration_s: float
+    otp_directions: int
+    swap_schedule: str
+
+
+def _eval_robustness_task(task: RobustEvalTask):
+    pair = task.pair
+    path_edges = task.path_edges
+    eta_val = task.eta_val
+    uk = task.upgrade_k
+    strat = task.strategy
+    kb = task.kbits
+    if task.upgrade_policy == "pair_path_only":
+        path_orig_edges = orig_edges_in_path(path_edges)
+        upgraded_edges = set(path_orig_edges[:uk])
+    else:
+        upgraded_edges = set(task.upgraded_edges)
+    p_bsm, swap_lat = swap_params_for_strategy(strat, task.knobs)
+
+    def evaluate_load(load: float) -> Tuple[float, float]:
+        avails = []
+        for seed in task.seeds:
+            edge_params: Dict[Tuple[str, str], EdgeParams] = {}
+            for a, b, dist_m, orig in path_edges:
+                dist_km = dist_m / 1000.0
+                use_strat = strat if (strat == "BK" or orig in upgraded_edges) else "BK"
+                p_eg, attempt_rate, coherence, _, extra_lat = edge_params_for_strategy(
+                    use_strat, dist_km, eta_val, task.knobs
+                )
+                edge_params[tuple(sorted((a, b)))] = EdgeParams(
+                    attempt_rate_hz=attempt_rate,
+                    p_eg=p_eg,
+                    coherence_time_s=coherence,
+                    extra_latency_s=extra_lat,
+                )
+            chain_path = []
+            for a, b, _, _ in path_edges:
+                if not chain_path:
+                    chain_path.append(a)
+                chain_path.append(b)
+            num_requests = max(1, int(round(load * 10)))
+            res = simulate_entanglement_service(
+                path=chain_path,
+                edge_params=edge_params,
+                swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
+                seed=seed,
+                horizon_s=task.horizon_s,
+                tau_s=task.tau_s,
+                num_requests=num_requests,
+                lambda_req=None,
+                otp_data_rate_bps=task.otp_data_rate_bps,
+                otp_session_duration_s=task.otp_session_duration_s,
+                otp_directions=task.otp_directions,
+                key_bits_per_pair=kb,
+                swap_schedule=task.swap_schedule,
+            )
+            avails.append(res["availability"])
+        return float(np.mean(avails)) if avails else 0.0, float(np.std(avails, ddof=0)) if avails else 0.0
+
+    load_rows = []
+    frontier_rows = []
+    evaluated = set()
+
+    def record(load, mean_av, std_av):
+        load_rows.append((load, mean_av, std_av, len(task.seeds)))
+        evaluated.add(load)
+
+    if task.binary_search:
+        for tgt in task.targets:
+            low = task.load_min
+            high = task.load_max
+            if low not in evaluated:
+                m, s = evaluate_load(low)
+                record(low, m, s)
+            else:
+                m = [row for row in load_rows if row[0] == low][0][1]
+            if high not in evaluated:
+                mh, sh = evaluate_load(high)
+                record(high, mh, sh)
+            else:
+                mh = [row for row in load_rows if row[0] == high][0][1]
+            if mh >= tgt:
+                frontier = high
+                frontier_rows.append(
+                    {
+                        "topology_id": task.topology_id,
+                        "upgrade_policy": task.upgrade_policy,
+                        "pair": f"{pair[0]}-{pair[1]}",
+                        "eta": eta_val,
+                        "strategy": strat,
+                        "upgrade_k": uk,
+                        "kbits": kb,
+                        "target": tgt,
+                        "frontier_load": frontier,
+                    }
+                )
+                continue
+            if m < tgt:
+                frontier = 0.0
+                frontier_rows.append(
+                    {
+                        "topology_id": task.topology_id,
+                        "upgrade_policy": task.upgrade_policy,
+                        "pair": f"{pair[0]}-{pair[1]}",
+                        "eta": eta_val,
+                        "strategy": strat,
+                        "upgrade_k": uk,
+                        "kbits": kb,
+                        "target": tgt,
+                        "frontier_load": frontier,
+                    }
+                )
+                continue
+            lo, hi = low, high
+            while (hi - lo) > task.load_tol:
+                mid = 0.5 * (lo + hi)
+                if mid not in evaluated:
+                    amid, smid = evaluate_load(mid)
+                    record(mid, amid, smid)
+                else:
+                    amid = [row for row in load_rows if row[0] == mid][0][1]
+                if amid >= tgt:
+                    lo = mid
+                else:
+                    hi = mid
+            frontier = lo
+            frontier_rows.append(
+                {
+                    "topology_id": task.topology_id,
+                    "upgrade_policy": task.upgrade_policy,
+                    "pair": f"{pair[0]}-{pair[1]}",
+                    "eta": eta_val,
+                    "strategy": strat,
+                    "upgrade_k": uk,
+                    "kbits": kb,
+                    "target": tgt,
+                    "frontier_load": frontier,
+                }
+            )
+    else:
+        for load in task.load_grid:
+            m, s = evaluate_load(load)
+            record(load, m, s)
+        for tgt in task.targets:
+            frontier = 0.0
+            for load, mean_av, _, _ in load_rows:
+                if mean_av >= tgt and load > frontier:
+                    frontier = load
+            frontier_rows.append(
+                {
+                    "topology_id": task.topology_id,
+                    "upgrade_policy": task.upgrade_policy,
+                    "pair": f"{pair[0]}-{pair[1]}",
+                    "eta": eta_val,
+                    "strategy": strat,
+                    "upgrade_k": uk,
+                    "kbits": kb,
+                    "target": tgt,
+                    "frontier_load": frontier,
+                }
+            )
+    return pair, eta_val, strat, uk, kb, load_rows, frontier_rows
 
 
 def parse_args():
@@ -87,16 +275,30 @@ def parse_args():
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--verify-parallel", action="store_true", help="Verify ProcessPool parallelism before running.")
+    p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
+    p.add_argument("--verify-parallel-seconds", type=float, default=1.0, help="CPU spin seconds for parallel verification.")
+    p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
     p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="sequential")
     p.add_argument("--topology-id", type=str, default="nsfnet")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_robustness"))
+    p.set_defaults(verify_parallel=True)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 4:
-        raise SystemExit("workers must be between 2 and 4")
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
+    if args.verify_parallel:
+        try:
+            info = verify_parallelism(args.workers, seconds=args.verify_parallel_seconds)
+            print(f"Parallel verify: mode={info['mode']} effective_workers={info['effective_workers']} pids={info['worker_pids']}")
+        except Exception as exc:
+            if args.allow_thread_fallback:
+                print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
+            else:
+                raise SystemExit(f"Parallel verification failed: {exc}") from exc
     pairs: List[Tuple[str, str]] = []
     if args.pairs_csv:
         with args.pairs_csv.open() as f:
@@ -175,7 +377,7 @@ def main():
         "runs",
     ]
 
-    tasks = []
+    tasks: List[RobustEvalTask] = []
     for pair in pairs:
         if args.network_scope == "shortest_path":
             path_edges = shortest_path_edges(expanded_edges, pair[0], pair[1])
@@ -187,148 +389,51 @@ def main():
             for uk in upgrade_ks:
                 for strat in strategies:
                     for kb in kbits_list:
-                        tasks.append((pair, path_edges, eta_val, uk, strat, kb))
+                        tasks.append(
+                            RobustEvalTask(
+                                topology_id=args.topology_id,
+                                pair=pair,
+                                path_edges=path_edges,
+                                eta_val=eta_val,
+                                upgrade_k=uk,
+                                strategy=strat,
+                                kbits=kb,
+                                upgrade_policy=args.upgrade_policy,
+                                upgraded_edges=list(upgrade_edges_cache.get(uk, [])),
+                                knobs=knobs,
+                                seeds=seeds,
+                                targets=targets,
+                                load_grid=load_grid,
+                                load_min=args.load_min,
+                                load_max=args.load_max,
+                                load_tol=args.load_tol,
+                                binary_search=args.binary_search,
+                                horizon_s=args.horizon_s,
+                                tau_s=args.tau_s,
+                                otp_data_rate_bps=args.otp_data_rate_bps,
+                                otp_session_duration_s=args.otp_session_duration_s,
+                                otp_directions=args.otp_directions,
+                                swap_schedule=args.swap_schedule,
+                            )
+                        )
 
-    def eval_task(task):
-        pair, path_edges, eta_val, uk, strat, kb = task
-        if args.upgrade_policy == "pair_path_only":
-            path_orig_edges = orig_edges_in_path(path_edges)
-            upgraded_edges = set(path_orig_edges[:uk])
-        else:
-            upgraded_edges = upgrade_edges_cache.get(uk, set())
-        p_bsm, swap_lat = swap_params_for_strategy(strat, knobs)
-        def evaluate_load(load: float) -> float:
-            avails = []
-            for seed in seeds:
-                edge_params: Dict[Tuple[str, str], EdgeParams] = {}
-                for a, b, dist_m, orig in path_edges:
-                    dist_km = dist_m / 1000.0
-                    use_strat = strat if (strat == "BK" or orig in upgraded_edges) else "BK"
-                    p_eg, attempt_rate, coherence, p_bsm_edge, extra_lat = edge_params_for_strategy(
-                        use_strat, dist_km, eta_val, knobs
-                    )
-                    edge_params[tuple(sorted((a, b)))] = EdgeParams(
-                        attempt_rate_hz=attempt_rate,
-                        p_eg=p_eg,
-                        coherence_time_s=coherence,
-                        extra_latency_s=extra_lat,
-                    )
-                chain_path = []
-                for a, b, _, _ in path_edges:
-                    if not chain_path:
-                        chain_path.append(a)
-                    chain_path.append(b)
-                num_requests = max(1, int(round(load * 10)))
-                res = simulate_entanglement_service(
-                    path=chain_path,
-                    edge_params=edge_params,
-                    swap_params=SwapParams(p_bsm=p_bsm, latency_s=swap_lat),
-                    seed=seed,
-                    horizon_s=args.horizon_s,
-                    tau_s=args.tau_s,
-                    num_requests=num_requests,
-                    lambda_req=None,
-                    otp_data_rate_bps=args.otp_data_rate_bps,
-                    otp_session_duration_s=args.otp_session_duration_s,
-                    otp_directions=args.otp_directions,
-                    key_bits_per_pair=kb,
-                    swap_schedule=args.swap_schedule,
-                )
-                avails.append(res["availability"])
-            return float(np.mean(avails)) if avails else 0.0, float(np.std(avails, ddof=0)) if avails else 0.0
-
-        load_rows = []
-        frontier_rows = []
-        evaluated = set()
-
-        def record(load, mean_av, std_av):
-            load_rows.append((load, mean_av, std_av, len(seeds)))
-            evaluated.add(load)
-
-        if args.binary_search:
-            for tgt in targets:
-                low = args.load_min
-                high = args.load_max
-                # evaluate bounds
-                if low not in evaluated:
-                    m, s = evaluate_load(low)
-                    record(low, m, s)
-                else:
-                    m, s = next((mn, st) for l, mn, st, _ in load_rows if l == low)
-                if high not in evaluated:
-                    mh, sh = evaluate_load(high)
-                    record(high, mh, sh)
-                else:
-                    mh, sh = next((mn, st) for l, mn, st, _ in load_rows if l == high)
-                frontier = 0.0
-                if m < tgt:
-                    frontier = 0.0
-                elif mh >= tgt:
-                    frontier = high
-                else:
-                    while high - low > args.load_tol:
-                        mid = (low + high) / 2.0
-                        mm, sm = evaluate_load(mid)
-                        record(mid, mm, sm)
-                        if mm >= tgt:
-                            low = mid
-                        else:
-                            high = mid
-                    frontier = low
-                frontier_rows.append(
-                    {
-                        "topology_id": args.topology_id,
-                        "upgrade_policy": args.upgrade_policy,
-                        "pair": f"{pair[0]}-{pair[1]}",
-                        "eta": eta_val,
-                        "strategy": strat,
-                        "upgrade_k": uk,
-                        "kbits": kb,
-                        "target": tgt,
-                        "frontier_load": frontier,
-                    }
-                )
-        else:
-            for load in load_grid:
-                m, s = evaluate_load(load)
-                record(load, m, s)
-            for tgt in targets:
-                frontier = 0.0
-                for load, mean_av, _, _ in load_rows:
-                    if mean_av >= tgt and load > frontier:
-                        frontier = load
-                frontier_rows.append(
-                    {
-                        "topology_id": args.topology_id,
-                        "upgrade_policy": args.upgrade_policy,
-                        "pair": f"{pair[0]}-{pair[1]}",
-                        "eta": eta_val,
-                        "strategy": strat,
-                        "upgrade_k": uk,
-                        "kbits": kb,
-                        "target": tgt,
-                        "frontier_load": frontier,
-                    }
-                )
-        return pair, eta_val, strat, uk, kb, load_rows, frontier_rows
-
-    max_workers = min(max(1, args.workers), 4)
+    max_workers = min(max(2, args.workers), 10)
     print(f"Using effective_workers={max_workers}")
     results = []
-    if max_workers > 1:
-        try:
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                fut_map = {ex.submit(eval_task, t): t for t in tasks}
-                for fut in as_completed(fut_map):
-                    results.append(fut.result())
-        except PermissionError:
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            fut_map = {ex.submit(_eval_robustness_task, t): t for t in tasks}
+            for fut in as_completed(fut_map):
+                results.append(fut.result())
+    except Exception as exc:
+        if args.allow_thread_fallback:
+            print(f"ProcessPool failed ({exc}); falling back to ThreadPool")
             with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                fut_map = {ex.submit(eval_task, t): t for t in tasks}
+                fut_map = {ex.submit(_eval_robustness_task, t): t for t in tasks}
                 for fut in as_completed(fut_map):
                     results.append(fut.result())
-    else:
-        for t in tasks:
-            results.append(eval_task(t))
+        else:
+            raise SystemExit(f"ProcessPool failed: {exc}") from exc
 
     # write raw (load-level) and pair-level frontier
     with raw_path.open("w", newline="") as f_raw:

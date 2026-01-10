@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--allow-wait", action="store_true", default=True)
     p.add_argument("--reserve-mode", choices=["upfront"], default="upfront")
     p.add_argument("--preset", type=str, default="", help="Named preset.")
-    p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_key_service_sweep"))
     p.add_argument("--resume", action="store_true", help="Resume from raw CSV.")
@@ -167,18 +167,14 @@ def main():
 
     results = []
     if tasks:
-        max_workers = min(args.workers, 4)
-        if args.workers > 4:
-            print(f"Capping workers to 4 (requested {args.workers})")
+        if args.workers < 2 or args.workers > 10:
+            raise SystemExit("workers must be between 2 and 10")
+        max_workers = min(args.workers, 10)
         print(f"Using effective_workers={max_workers}")
-        if max_workers > 1:
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                future_map = {ex.submit(run_cell, t): t for t in tasks}
-                for fut in as_completed(future_map):
-                    results.append(fut.result())
-        else:
-            for t in tasks:
-                results.append(run_cell(t))
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            future_map = {ex.submit(run_cell, t): t for t in tasks}
+            for fut in as_completed(future_map):
+                results.append(fut.result())
 
     mode = "a" if (args.resume and raw_path.exists()) else "w"
     with raw_path.open(mode, newline="") as f_raw:

@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--p-bsm", type=float, default=0.9, help="Logged BSM success prob (placeholder).")
     p.add_argument("--key-bits-per-pair", type=float, default=1.0, help="Logged for validation use.")
     p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
-    p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
     p.add_argument("--resume", action="store_true", help="Resume from existing raw CSV to skip completed cells.")
     p.add_argument("--base-seed", type=int, default=0, help="Base seed used to derive deterministic per-cell seeds.")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_phase_sweep"))
@@ -226,35 +226,18 @@ def main():
 
         results: List[Tuple] = []
         if tasks:
-            max_workers = min(args.workers, 4)
-            if args.workers > 4:
-                print(f"Capping workers to 4 (requested {args.workers})")
+            if args.workers < 2 or args.workers > 10:
+                raise SystemExit("workers must be between 2 and 10")
+            max_workers = min(args.workers, 10)
             print(f"Using effective_workers={max_workers}")
-            if max_workers <= 1:
-                for t in tasks:
-                    row = run_cell(t)
+            with ProcessPoolExecutor(max_workers=max_workers) as ex:
+                future_map = {ex.submit(run_cell, t): t for t in tasks}
+                for fut in as_completed(future_map):
+                    row = fut.result()
                     writer.writerow(row)
                     f_raw.flush()
                     if row[-2] == "ok":
                         results.append(row)
-            else:
-                try:
-                    with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                        future_map = {ex.submit(run_cell, t): t for t in tasks}
-                        for fut in as_completed(future_map):
-                            row = fut.result()
-                            writer.writerow(row)
-                            f_raw.flush()
-                            if row[-2] == "ok":
-                                results.append(row)
-                except PermissionError:
-                    # Fallback to serial if process pool is not permitted
-                    for t in tasks:
-                        row = run_cell(t)
-                        writer.writerow(row)
-                        f_raw.flush()
-                        if row[-2] == "ok":
-                            results.append(row)
         else:
             with raw_path.open() as f:
                 reader = csv.DictReader(f)

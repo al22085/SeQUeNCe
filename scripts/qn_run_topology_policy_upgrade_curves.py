@@ -15,7 +15,55 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.qn_topologies import load_edge_distances_csv
+from scripts.qn_topologies import load_edge_distances_csv, build_topology_from_dist_map
+from sequence.qn.parallel import verify_parallelism
+
+
+def parse_float_list(raw: str) -> List[float]:
+    return [float(x) for x in raw.split(",") if x]
+
+
+def dijkstra(topo: Dict[str, List[str]], dist: Dict[tuple, float], src: str) -> Dict[str, float]:
+    import heapq
+
+    pq = [(0.0, src)]
+    best = {src: 0.0}
+    while pq:
+        d, n = heapq.heappop(pq)
+        if d > best[n]:
+            continue
+        for nei in topo[n]:
+            key = tuple(sorted((n, nei)))
+            w = dist[key]
+            nd = d + w
+            if nei not in best or nd < best[nei]:
+                best[nei] = nd
+                heapq.heappush(pq, (nd, nei))
+    return best
+
+
+def all_pairs_sp_km(dist_map: Dict[tuple, float]) -> List[tuple]:
+    topo = build_topology_from_dist_map(dist_map)
+    nodes = sorted(topo.keys())
+    pairs = []
+    for i in range(len(nodes)):
+        src = nodes[i]
+        best = dijkstra(topo, dist_map, src)
+        for j in range(i + 1, len(nodes)):
+            dst = nodes[j]
+            if dst not in best:
+                continue
+            pairs.append((best[dst] / 1000.0, src, dst))
+    return pairs
+
+
+def within_tol(sp_km: float, target_km: float, abs_tol: float, rel_tol: float) -> bool:
+    abs_err = abs(sp_km - target_km)
+    if abs_tol and abs_err <= abs_tol:
+        return True
+    if rel_tol and target_km > 0:
+        return abs_err / target_km <= rel_tol
+    return False
 
 
 def parse_args():
@@ -45,8 +93,10 @@ def parse_args():
     p.add_argument("--seeds", type=str, default="0,1,2,3")
     p.add_argument("--targets-km", type=str, default="404,511,1002")
     p.add_argument("--pairs-per-target", type=int, default=1)
-    p.add_argument("--min-nodes", type=int, default=10, help="Min nodes when auto-selecting diverse topologies.")
-    p.add_argument("--max-nodes", type=int, default=30, help="Max nodes when auto-selecting diverse topologies.")
+    p.add_argument("--pair-distance-abs-tol-km", type=float, default=0.0)
+    p.add_argument("--pair-distance-rel-tol", type=float, default=0.15)
+    p.add_argument("--min-nodes", type=int, default=None, help="Min nodes when auto-selecting diverse topologies.")
+    p.add_argument("--max-nodes", type=int, default=None, help="Max nodes when auto-selecting diverse topologies.")
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
     p.add_argument("--attempt-rate-opt-hz", type=float, default=5000)
@@ -58,8 +108,15 @@ def parse_args():
     p.add_argument("--load-min", type=float, default=0.001)
     p.add_argument("--load-max", type=float, default=5.0)
     p.add_argument("--load-tol", type=float, default=0.05)
+    p.add_argument("--binary-search", action="store_true", help="Use binary search for frontier (default).")
+    p.add_argument("--no-binary-search", dest="binary_search", action="store_false", help="Disable binary search.")
+    p.add_argument("--verify-parallel", action="store_true", help="Verify ProcessPool parallelism before running.")
+    p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
+    p.add_argument("--verify-parallel-seconds", type=float, default=1.0, help="CPU spin seconds for parallel verification.")
+    p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--out-dir", type=Path, default=Path("out/topology_policy_upgrade_curves"))
+    p.set_defaults(binary_search=True, verify_parallel=True)
     return p.parse_args()
 
 
@@ -74,6 +131,28 @@ def run_cmd(cmd: List[str]):
 def load_csv(path: Path) -> List[Dict[str, str]]:
     with path.open() as f:
         return list(csv.DictReader(f))
+
+
+def summarize_pair_errors(pairs_csv: Path) -> Dict[str, Dict[str, float]]:
+    rows = load_csv(pairs_csv)
+    by_label: Dict[str, List[Dict[str, str]]] = {}
+    for r in rows:
+        label = r["label"].split("_")[0]
+        by_label.setdefault(label, []).append(r)
+    summary: Dict[str, Dict[str, float]] = {}
+    for label, vals in by_label.items():
+        abs_errs = [float(v["abs_error_km"]) for v in vals]
+        rel_errs = [float(v["rel_error"]) for v in vals]
+        abs_errs_sorted = sorted(abs_errs)
+        rel_errs_sorted = sorted(rel_errs)
+        mid = len(abs_errs_sorted) // 2
+        summary[label] = {
+            "abs_median": abs_errs_sorted[mid],
+            "abs_max": max(abs_errs_sorted),
+            "rel_median": rel_errs_sorted[mid],
+            "rel_max": max(rel_errs_sorted),
+        }
+    return summary
 
 
 def ensure_distance_csv(
@@ -115,8 +194,17 @@ def ensure_distance_csv(
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 4:
-        raise SystemExit("workers must be between 2 and 4")
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
+    if args.verify_parallel:
+        try:
+            info = verify_parallelism(args.workers, seconds=args.verify_parallel_seconds)
+            print(f"Parallel verify: mode={info['mode']} effective_workers={info['effective_workers']} pids={info['worker_pids']}")
+        except Exception as exc:
+            if args.allow_thread_fallback:
+                print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
+            else:
+                raise SystemExit(f"Parallel verification failed: {exc}") from exc
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)] if args.edge_csv_list else []
@@ -167,36 +255,108 @@ def main():
                     f"scripts/qn_topologybench_fetch.py, expected >= {args.auto_select_topologies}."
                 )
 
+        targets = parse_float_list(args.targets_km)
+        dist_dir = Path("data/topologybench_distances")
+        eligible = []
+        eligibility_rows = []
+        eligible_rows = []
+        for r in rows:
+            topo_id = r["topology_id"]
+            edge_csv = ensure_distance_csv(
+                topo_id,
+                dist_dir,
+                args.topologybench_xlsx_dir,
+                args.topologybench_zip,
+                args.manifest,
+                args.no_download,
+                args.no_copy,
+            )
+            dist_map = load_edge_distances_csv(edge_csv)
+            pairs = all_pairs_sp_km(dist_map)
+            diameter_km = max((p[0] for p in pairs), default=0.0)
+            counts = {}
+            ok = True
+            for tgt in targets:
+                count = sum(1 for sp_km, _, _ in pairs if within_tol(sp_km, tgt, args.pair_distance_abs_tol_km, args.pair_distance_rel_tol))
+                counts[str(tgt)] = count
+                if count < args.pairs_per_target:
+                    ok = False
+            eligibility_rows.append(
+                {
+                    "topology_id": topo_id,
+                    "n_nodes": r["n_nodes"],
+                    "n_edges": r["n_edges"],
+                    "avg_degree": r["avg_degree"],
+                    "diameter_km": f"{diameter_km:.2f}",
+                    **{f"count_{t}": counts[str(t)] for t in targets},
+                    "eligible": ok,
+                }
+            )
+            if ok:
+                eligible.append(r)
+                eligible_rows.append(
+                    {
+                        "topology_id": topo_id,
+                        "n_nodes": r["n_nodes"],
+                        "n_edges": r["n_edges"],
+                        "avg_degree": r["avg_degree"],
+                        "diameter_km": f"{diameter_km:.2f}",
+                    }
+                )
+
+        print(f"Topologies found: {len(rows)}")
+        print(f"Eligible under tolerance: {len(eligible)}")
+        for row in eligibility_rows:
+            counts_str = ", ".join([f"{k}={row[k]}" for k in row if k.startswith("count_")])
+            print(f"{row['topology_id']} diameter_km={row['diameter_km']} {counts_str} eligible={row['eligible']}")
+        eligibility_csv = args.out_dir / "topologybench_list_eligibility.csv"
+        with eligibility_csv.open("w", newline="") as f:
+            fieldnames = list(eligibility_rows[0].keys()) if eligibility_rows else []
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(eligibility_rows)
+
+        eligible_csv = args.out_dir / "topologybench_list_eligible.csv"
+        with eligible_csv.open("w", newline="") as f:
+            fieldnames = ["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(eligible_rows)
+
+        if len(eligible) < args.auto_select_topologies:
+            raise SystemExit(
+                f"Not enough topologies can realize targets within tolerance. "
+                f"Eligible={len(eligible)} requested={args.auto_select_topologies}. "
+                f"Relax --pair-distance-rel-tol/--pair-distance-abs-tol-km or reduce targets."
+            )
+
         selected_csv = args.out_dir / "topologybench_selected.csv"
-        run_cmd(
-            [
-                "python",
-                "scripts/qn_select_diverse_topologies.py",
-                "--list-csv",
-                str(list_csv),
-                "--k",
-                str(args.auto_select_topologies),
-                "--min-nodes",
-                str(args.min_nodes),
-                "--max-nodes",
-                str(args.max_nodes),
-                "--out-csv",
-                str(selected_csv),
-            ]
-        )
+        select_cmd = [
+            "python",
+            "scripts/qn_select_diverse_topologies.py",
+            "--list-csv",
+            str(eligible_csv),
+            "--k",
+            str(args.auto_select_topologies),
+            "--out-csv",
+            str(selected_csv),
+        ]
+        if args.min_nodes is not None:
+            select_cmd += ["--min-nodes", str(args.min_nodes)]
+        if args.max_nodes is not None:
+            select_cmd += ["--max-nodes", str(args.max_nodes)]
+        run_cmd(select_cmd)
         selected = load_csv(selected_csv)
         topo_ids = [r["topology_id"] for r in selected]
-        if len(topo_ids) < args.auto_select_topologies:
-            raise SystemExit(
-                f"TopologyBench zip appears to contain only {len(topo_ids)} topologies "
-                f"(likely a test fixture). Please fetch the pinned full zip via "
-                f"scripts/qn_topologybench_fetch.py, expected >= {args.auto_select_topologies}."
-            )
         selection_meta = {
             "requested_k": args.auto_select_topologies,
             "selected_k": len(topo_ids),
             "selected_topologies": topo_ids,
             "source_list_csv": str(list_csv),
+            "eligibility_list_csv": str(eligibility_csv),
+            "eligible_list_csv": str(eligible_csv),
+            "pair_distance_abs_tol_km": args.pair_distance_abs_tol_km,
+            "pair_distance_rel_tol": args.pair_distance_rel_tol,
         }
         (args.out_dir / "topology_selection.json").write_text(json.dumps(selection_meta, indent=2))
 
@@ -267,10 +427,28 @@ def main():
                 args.targets_km,
                 "--pairs-per-target",
                 str(args.pairs_per_target),
+                "--pair-distance-abs-tol-km",
+                str(args.pair_distance_abs_tol_km),
+                "--pair-distance-rel-tol",
+                str(args.pair_distance_rel_tol),
                 "--out-csv",
                 str(pairs_csv),
             ]
         )
+        # verify errors are within tolerance (median per label group)
+        summary_errs = summarize_pair_errors(pairs_csv)
+        for label, errs in summary_errs.items():
+            if args.pair_distance_abs_tol_km and errs["abs_median"] > args.pair_distance_abs_tol_km:
+                raise SystemExit(
+                    f"{topo_id} {label} median abs_error {errs['abs_median']:.2f} km exceeds "
+                    f"abs tol {args.pair_distance_abs_tol_km}"
+                )
+            if args.pair_distance_rel_tol and errs["rel_median"] > args.pair_distance_rel_tol:
+                raise SystemExit(
+                    f"{topo_id} {label} median rel_error {errs['rel_median']:.3f} exceeds "
+                    f"rel tol {args.pair_distance_rel_tol}"
+                )
+        print(f"{topo_id} pair error summary: {summary_errs}")
         for policy in policies:
             run_out = topo_dir / policy
             run_out.mkdir(parents=True, exist_ok=True)
@@ -300,7 +478,6 @@ def main():
                         str(args.kbits),
                         "--seeds",
                         args.seeds,
-                        "--binary-search",
                         "--load-min",
                         str(args.load_min),
                         "--load-max",
@@ -340,6 +517,12 @@ def main():
                         "--out-dir",
                         str(run_out),
                     ]
+                    if args.binary_search:
+                        cmd.append("--binary-search")
+                    if not args.verify_parallel:
+                        cmd.append("--no-verify-parallel")
+                    if args.allow_thread_fallback:
+                        cmd.append("--allow-thread-fallback")
                     run_cmd(cmd)
 
                     curve_csv = run_out / "upgrade_k_curve_numbers.csv"

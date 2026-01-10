@@ -11,8 +11,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Select diverse topologies by size/diameter/degree.")
     p.add_argument("--list-csv", type=Path, required=True, help="CSV from qn_list_topologybench.py")
     p.add_argument("--k", type=int, default=3)
-    p.add_argument("--min-nodes", type=int, default=10)
-    p.add_argument("--max-nodes", type=int, default=30)
+    p.add_argument("--min-nodes", type=int, default=None)
+    p.add_argument("--max-nodes", type=int, default=None)
     p.add_argument("--out-csv", type=Path, default=Path("out/topologybench_selected.csv"))
     return p.parse_args()
 
@@ -22,7 +22,10 @@ def main():
     with args.list_csv.open() as f:
         rows = list(csv.DictReader(f))
     # filter by size
-    rows = [r for r in rows if args.min_nodes <= int(r["n_nodes"]) <= args.max_nodes]
+    if args.min_nodes is not None:
+        rows = [r for r in rows if int(r["n_nodes"]) >= args.min_nodes]
+    if args.max_nodes is not None:
+        rows = [r for r in rows if int(r["n_nodes"]) <= args.max_nodes]
     if not rows:
         raise SystemExit("No topologies within size range")
 
@@ -54,12 +57,11 @@ def main():
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"],
-        )
+        fieldnames = ["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(selected)
+        for row in selected:
+            writer.writerow({k: row[k] for k in fieldnames})
     print("Selected topologies:")
     for r in selected:
         print(f"{r['topology_id']},{r['n_nodes']},{r['n_edges']},{float(r['avg_degree']):.2f},{float(r['diameter_km']):.2f}")

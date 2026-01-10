@@ -90,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dqt-eta-dest", type=float, default=0.8)
     p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_crossover_sensitivity"))
-    p.add_argument("--workers", type=int, default=4, help="Parallel workers (capped at 4) for inner sweeps.")
+    p.add_argument("--workers", type=int, default=4, help="Parallel workers (2..10) for inner sweeps.")
     return p.parse_args()
 
 
@@ -103,12 +103,12 @@ def main():
     sens_rows = []
     for v in values:
         sweep_dir = out_dir / f"{args.knob}_{v}"
-        # force inner worker cap between 2 and 4 unless user set 1 for tiny sweeps
+        # force inner worker cap between 2 and 10
         inner_workers = args.workers
-        if inner_workers < 1:
-            inner_workers = 1
-        if inner_workers > 4:
-            inner_workers = 4
+        if inner_workers < 2:
+            inner_workers = 2
+        if inner_workers > 10:
+            inner_workers = 10
         env = dict(**os.environ, WORKERS=str(inner_workers))
         run_phase(args, sweep_dir, args.knob, v, env)
         agg_path = sweep_dir / "phase_agg.csv"

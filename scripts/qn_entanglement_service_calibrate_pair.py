@@ -82,8 +82,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 4:
-        raise SystemExit("workers must be between 2 and 4")
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
     etas = parse_list(args.etas, float)
     loads = parse_list(args.loads, float)
     seeds = parse_list(args.seeds, int)

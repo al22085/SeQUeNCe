@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--upgrade-mult", type=float, default=None)
     p.add_argument("--upgrade-edges", type=str, default="")
     p.add_argument("--preset", type=str, default="", help="Named preset.")
-    p.add_argument("--workers", type=int, default=1, help="Parallel workers (capped at 4).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_key_service_frontier"))
     p.add_argument("--resume", action="store_true")
     p.add_argument("--base-seed", type=int, default=0)
@@ -165,6 +165,8 @@ def main():
     total_cells = len(strategies) * len(lambdas) * len(kmax_list) * len(targets)
     if total_cells > 1 and args.workers < 2:
         raise ValueError("Workers must be >=2 for non-trivial frontier runs")
+    if args.workers < 2 or args.workers > 10:
+        raise ValueError("Workers must be between 2 and 10")
 
     base_rates = {e: compute_link_key_rate("BK", {}, args.strategy_params, args.base_key_rate_bps) for e in edges}
     scenarios = apply_upgrades(base_rates, topo, args)
@@ -335,9 +337,7 @@ def main():
                     for target_A in targets:
                         tasks.append((scenario_name, rates, strat, lamb, kmax, target_A))
 
-    max_workers = min(args.workers, 4)
-    if args.workers > 4:
-        print(f"Capping workers to 4 (requested {args.workers})")
+    max_workers = min(args.workers, 10)
     print(f"Using effective_workers={max_workers}")
 
     results = []
@@ -355,22 +355,10 @@ def main():
             base_eval_cache[base_key] = (float(row[5]), int(row[7]), int(row[8]))
 
     if tasks:
-        if max_workers > 1:
-            try:
-                with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                    fut_map = {ex.submit(search_task, t): t for t in tasks}
-                    for fut in as_completed(fut_map):
-                        res, rows = fut.result()
-                        write_rows(rows)
-                        results.append(res)
-            except PermissionError:
-                for t in tasks:
-                    res, rows = search_task(t)
-                    write_rows(rows)
-                    results.append(res)
-        else:
-            for t in tasks:
-                res, rows = search_task(t)
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            fut_map = {ex.submit(search_task, t): t for t in tasks}
+            for fut in as_completed(fut_map):
+                res, rows = fut.result()
                 write_rows(rows)
                 results.append(res)
 

@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_key_service"))
     p.add_argument("--resume", action="store_true", help="Append incremental raw logs.")
     p.add_argument("--preset", type=str, default="", help="Named preset for key-service runs.")
-    p.add_argument("--workers", type=int, default=1, help="Reserved for future parallelism; capped to 4.")
+    p.add_argument("--workers", type=int, default=2, help="Reserved for future parallelism (2..10).")
     return p.parse_args()
 
 
@@ -105,7 +105,9 @@ def main():
 
     summary = result.copy()
     summary.pop("logs", None)
-    summary["effective_workers"] = min(args.workers, 4)
+    if args.workers < 2 or args.workers > 10:
+        raise SystemExit("workers must be between 2 and 10")
+    summary["effective_workers"] = min(args.workers, 10)
     with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
     print(f"Wrote {raw_path}")
