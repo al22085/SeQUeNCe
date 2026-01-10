@@ -11,7 +11,7 @@ import getpass
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 
 def _spin(seconds: float) -> int:
@@ -73,34 +73,156 @@ def _parse_cpuset_list(raw: str) -> int | None:
     return count or None
 
 
-def get_cpu_limit() -> tuple[float | None, str]:
-    """Return (cpu_limit, reason). cpu_limit None means unlimited."""
-    cpu_max = _parse_cpu_max(Path("/sys/fs/cgroup/cpu.max"))
-    cpuset_path = Path("/sys/fs/cgroup/cpuset.cpus.effective")
-    if not cpuset_path.exists():
-        cpuset_path = Path("/sys/fs/cgroup/cpuset.cpus")
-    cpuset_raw = cpuset_path.read_text().strip() if cpuset_path.exists() else ""
-    cpuset_count = _parse_cpuset_list(cpuset_raw)
+def _read_proc_self_cgroup() -> Tuple[str | None, Dict[str, str]]:
+    v2_path = None
+    v1_paths: Dict[str, str] = {}
+    try:
+        raw = Path("/proc/self/cgroup").read_text().splitlines()
+    except OSError:
+        return None, {}
+    for line in raw:
+        parts = line.strip().split(":", 2)
+        if len(parts) != 3:
+            continue
+        subsystems = parts[1]
+        path = parts[2]
+        if subsystems == "":
+            v2_path = path
+        else:
+            for sub in subsystems.split(","):
+                v1_paths[sub] = path
+    return v2_path, v1_paths
+
+
+def _parse_mountinfo() -> Tuple[str | None, Dict[str, str]]:
+    cgroup2_mount = None
+    cgroup_mounts: Dict[str, str] = {}
+    try:
+        raw = Path("/proc/self/mountinfo").read_text().splitlines()
+    except OSError:
+        return None, {}
+    for line in raw:
+        if " - " not in line:
+            continue
+        pre, post = line.split(" - ", 1)
+        pre_fields = pre.split()
+        post_fields = post.split()
+        if len(pre_fields) < 5 or len(post_fields) < 3:
+            continue
+        mountpoint = pre_fields[4]
+        fstype = post_fields[0]
+        superopts = post_fields[2]
+        if fstype == "cgroup2":
+            cgroup2_mount = mountpoint
+        elif fstype == "cgroup":
+            subs = superopts.split(",")
+            for sub in subs:
+                if sub in ("cpu", "cpuset"):
+                    cgroup_mounts[sub] = mountpoint
+    return cgroup2_mount, cgroup_mounts
+
+
+def _read_cpu_stat(path: Path) -> Dict[str, int]:
+    if not path.exists():
+        return {}
+    out: Dict[str, int] = {}
+    for line in path.read_text().splitlines():
+        parts = line.strip().split()
+        if len(parts) != 2:
+            continue
+        key, val = parts
+        try:
+            out[key] = int(val)
+        except ValueError:
+            continue
+    return out
+
+
+def detect_cpu_limit() -> Dict[str, object]:
+    affinity_cpus = None
+    try:
+        affinity_cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        affinity_cpus = os.cpu_count()
+
+    v2_path, v1_paths = _read_proc_self_cgroup()
+    cgroup2_mount, cgroup_mounts = _parse_mountinfo()
+
+    cg_version = None
+    cpu_max = None
+    cpuset_cores = None
+    quota_cores = None
+    cpu_stat_path = None
+    cg_path = None
+
+    if cgroup2_mount and v2_path is not None:
+        cg_version = "v2"
+        cg_path = str(Path(cgroup2_mount) / v2_path.lstrip("/"))
+        cg_dir = Path(cg_path)
+        cpu_max = _parse_cpu_max(cg_dir / "cpu.max")
+        quota_cores = cpu_max
+        cpuset_path = cg_dir / "cpuset.cpus.effective"
+        if not cpuset_path.exists():
+            cpuset_path = Path(cgroup2_mount) / "cpuset.cpus.effective"
+        if cpuset_path.exists():
+            cpuset_cores = _parse_cpuset_list(cpuset_path.read_text())
+        cpu_stat_path = cg_dir / "cpu.stat"
+    else:
+        cg_version = "v1"
+        cpu_path = v1_paths.get("cpu") or v1_paths.get("cpuacct")
+        if cpu_path and "cpu" in cgroup_mounts:
+            cpu_dir = Path(cgroup_mounts["cpu"]) / cpu_path.lstrip("/")
+            quota_path = cpu_dir / "cpu.cfs_quota_us"
+            period_path = cpu_dir / "cpu.cfs_period_us"
+            try:
+                quota = int(quota_path.read_text().strip())
+                period = int(period_path.read_text().strip())
+                if quota > 0 and period > 0:
+                    quota_cores = quota / period
+            except OSError:
+                pass
+            cpu_stat_path = cpu_dir / "cpu.stat"
+        cpuset_path = None
+        cpuset_cg = v1_paths.get("cpuset")
+        if cpuset_cg and "cpuset" in cgroup_mounts:
+            cpuset_path = Path(cgroup_mounts["cpuset"]) / cpuset_cg.lstrip("/") / "cpuset.cpus"
+            if cpuset_path.exists():
+                cpuset_cores = _parse_cpuset_list(cpuset_path.read_text())
+
     limits = []
     reasons = []
-    if cpu_max is not None:
-        limits.append(cpu_max)
-        reasons.append(f"cpu.max={cpu_max:.2f}")
-    if cpuset_count is not None:
-        limits.append(float(cpuset_count))
-        reasons.append(f"cpuset={cpuset_count}")
-    if not limits:
-        return None, "unlimited"
-    return min(limits), "+".join(reasons)
+    if affinity_cpus:
+        limits.append(float(affinity_cpus))
+        reasons.append(f"affinity={affinity_cpus}")
+    if cpuset_cores:
+        limits.append(float(cpuset_cores))
+        reasons.append(f"cpuset={cpuset_cores}")
+    if quota_cores:
+        limits.append(float(quota_cores))
+        reasons.append(f"quota={quota_cores:.2f}")
+
+    effective_cpu_limit = min(limits) if limits else None
+    return {
+        "affinity_cpus": affinity_cpus,
+        "cpuset_cores": cpuset_cores,
+        "quota_cores": quota_cores,
+        "effective_cpu_limit": effective_cpu_limit,
+        "limit_reason": "+".join(reasons) if reasons else "unlimited",
+        "cgroup_version": cg_version,
+        "cgroup_path": cg_path,
+        "cpu_stat_path": str(cpu_stat_path) if cpu_stat_path else "",
+    }
 
 
 def normalize_workers(requested: int, *, min_workers: int = 2, max_workers: int = 20) -> tuple[int, float | None, str]:
     if requested < min_workers or requested > max_workers:
         raise RuntimeError(f"workers must be between {min_workers} and {max_workers}")
-    limit, reason = get_cpu_limit()
-    if limit is None:
+    limit_info = detect_cpu_limit()
+    limit = limit_info["effective_cpu_limit"]
+    reason = limit_info["limit_reason"]
+    if not limit:
         return requested, None, reason
-    effective = int(max(1, math.floor(limit)))
+    effective = int(max(1, math.floor(float(limit))))
     if effective < min_workers:
         raise RuntimeError(
             f"CPU limit too low for requested parallelism: limit={limit:.2f} ({reason}). "
@@ -148,6 +270,9 @@ def verify_parallelism(
     ctx = mp_context or get_mp_context()
     start_method = ctx.get_start_method()
     shm_ok = _shm_ok()
+    limit_info = detect_cpu_limit()
+    cpu_stat_path = Path(limit_info["cpu_stat_path"]) if limit_info["cpu_stat_path"] else None
+    cpu_stat_before = _read_cpu_stat(cpu_stat_path) if cpu_stat_path else {}
 
     try:
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
@@ -162,36 +287,52 @@ def verify_parallelism(
             active_workers = 0
             aggregate_cpu = 0.0
             if mode == "pid_activity":
-                time.sleep(min(0.5, task_seconds / 2.0))
                 pid_list = ",".join(str(pid) for pid in unique_pids)
-                ps_cmd = ["ps", "-p", pid_list, "-o", "pid,ppid,stat,%cpu,cmd"]
-                try:
-                    ps_snapshot = subprocess.check_output(ps_cmd, text=True)
-                except subprocess.CalledProcessError:
-                    ps_cmd = [
-                        "ps",
-                        "-u",
-                        getpass.getuser(),
-                        "-o",
-                        "pid,ppid,stat,%cpu,cmd",
-                        "--sort=-%cpu",
-                    ]
-                    ps_snapshot = subprocess.check_output(ps_cmd, text=True)
-                for line in ps_snapshot.splitlines()[1:]:
-                    parts = line.split(None, 4)
-                    if len(parts) < 5:
-                        continue
-                    pid_s, _, stat, cpu_s, _ = parts
+                best_snapshot = ""
+                best_active = 0
+                best_agg = 0.0
+                for _ in range(3):
+                    time.sleep(max(0.5, task_seconds / 4.0))
+                    ps_cmd = ["ps", "-p", pid_list, "-o", "pid,ppid,stat,%cpu,cmd"]
                     try:
-                        pid = int(pid_s)
-                        cpu = float(cpu_s)
-                    except ValueError:
-                        continue
-                    if pid in unique_pids:
-                        worker_cpu[pid] = (stat, cpu)
-                        aggregate_cpu += cpu
-                        if cpu >= 50.0:
-                            active_workers += 1
+                        ps_snapshot = subprocess.check_output(ps_cmd, text=True)
+                    except subprocess.CalledProcessError:
+                        ps_cmd = [
+                            "ps",
+                            "-u",
+                            getpass.getuser(),
+                            "-o",
+                            "pid,ppid,stat,%cpu,cmd",
+                            "--sort=-%cpu",
+                        ]
+                        ps_snapshot = subprocess.check_output(ps_cmd, text=True)
+                    worker_cpu = {}
+                    active_workers = 0
+                    aggregate_cpu = 0.0
+                    for line in ps_snapshot.splitlines()[1:]:
+                        parts = line.split(None, 4)
+                        if len(parts) < 5:
+                            continue
+                        pid_s, _, stat, cpu_s, _ = parts
+                        try:
+                            pid = int(pid_s)
+                            cpu = float(cpu_s)
+                        except ValueError:
+                            continue
+                        if pid in unique_pids:
+                            worker_cpu[pid] = (stat, cpu)
+                            aggregate_cpu += cpu
+                            if cpu >= 50.0 and "R" in stat:
+                                active_workers += 1
+                    if active_workers > best_active or aggregate_cpu > best_agg:
+                        best_active = active_workers
+                        best_agg = aggregate_cpu
+                        best_snapshot = ps_snapshot
+                    if active_workers >= max(1, math.floor(0.8 * workers)):
+                        break
+                active_workers = best_active
+                aggregate_cpu = best_agg
+                ps_snapshot = best_snapshot
             pids = [f.result() for f in futures]
             elapsed = time.perf_counter() - start
     except PermissionError as exc:
@@ -212,6 +353,11 @@ def verify_parallelism(
             f"Expected >= {min(workers, num_tasks)} worker pids, got {len(unique_pids)}: {unique_pids}"
         )
 
+    cpu_stat_after = _read_cpu_stat(cpu_stat_path) if cpu_stat_path else {}
+    throttled_usec = cpu_stat_after.get("throttled_usec", 0) - cpu_stat_before.get("throttled_usec", 0)
+    nr_throttled = cpu_stat_after.get("nr_throttled", 0) - cpu_stat_before.get("nr_throttled", 0)
+    throttled_detected = throttled_usec > 0 or nr_throttled > 0
+
     serial_time = task_seconds * num_tasks
     expected_parallel = (serial_time / workers) * overhead_factor
     if mode == "speedup" and elapsed > expected_parallel:
@@ -220,17 +366,23 @@ def verify_parallelism(
             f"expected_parallel {expected_parallel:.3f}s (serial_time={serial_time:.3f}s, "
             f"overhead_factor={overhead_factor:.2f})"
         )
+    expected_cpu = 100.0 * min(
+        workers,
+        limit_info["effective_cpu_limit"] if limit_info["effective_cpu_limit"] else workers,
+    )
+    observed_cpu_limit = aggregate_cpu / 100.0 if aggregate_cpu else None
     if mode == "pid_activity":
         if active_workers < max(1, math.floor(0.8 * workers)):
             raise RuntimeError(
                 f"Parallel verification: too few active workers ({active_workers}/{workers}). "
                 "Likely idle workers or chunking too coarse. "
-                f"worker_pids={unique_pids} aggregate_cpu={aggregate_cpu:.1f}%"
+                f"worker_pids={unique_pids} aggregate_cpu={aggregate_cpu:.1f}%\n"
+                f"ps_snapshot:\n{ps_snapshot}"
             )
-        if aggregate_cpu < workers * 50.0:
+        if aggregate_cpu < expected_cpu * 0.8 and not throttled_detected:
             raise RuntimeError(
-                f"Parallel verification: aggregate CPU {aggregate_cpu:.1f}% too low for {workers} workers. "
-                "Check cgroup/cpuset limits or task granularity."
+                f"Parallel verification: aggregate CPU {aggregate_cpu:.1f}% below expected {expected_cpu:.1f}% "
+                "without throttling; check chunking or scheduler."
             )
 
     return {
@@ -250,4 +402,10 @@ def verify_parallelism(
         "worker_cpu": worker_cpu,
         "active_workers": active_workers,
         "aggregate_cpu": aggregate_cpu,
+        "expected_cpu": expected_cpu,
+        "observed_cpu_limit": observed_cpu_limit,
+        "throttled_detected": throttled_detected,
+        "throttled_usec_delta": throttled_usec,
+        "nr_throttled_delta": nr_throttled,
+        "cpu_limit_info": limit_info,
     }

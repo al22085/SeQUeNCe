@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Dict, List
@@ -208,6 +209,7 @@ def ensure_distance_csv(
 
 def main():
     args = parse_args()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
         effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
     except RuntimeError as exc:
@@ -236,12 +238,41 @@ def main():
                 )
                 if info.get("ps_snapshot"):
                     print("Parallel activity ps snapshot:\n" + info["ps_snapshot"])
+            limit_info = info.get("cpu_limit_info", {})
+            print(
+                "CPU limit summary: "
+                f"affinity_cpus={limit_info.get('affinity_cpus')} "
+                f"cpuset_cores={limit_info.get('cpuset_cores')} "
+                f"quota_cores={limit_info.get('quota_cores')} "
+                f"effective_cpu_limit={limit_info.get('effective_cpu_limit')} "
+                f"limit_reason={limit_info.get('limit_reason')}"
+            )
+            print(
+                "CPU throttling: "
+                f"throttled_detected={info.get('throttled_detected')} "
+                f"throttled_usec_delta={info.get('throttled_usec_delta')} "
+                f"nr_throttled_delta={info.get('nr_throttled_delta')}"
+            )
+            if info.get("observed_cpu_limit") and info["observed_cpu_limit"] < effective_workers:
+                tuned = max(2, int(math.floor(info["observed_cpu_limit"])))
+                print(
+                    f"WARNING: observed_cpu_limit={info['observed_cpu_limit']:.2f}; "
+                    f"auto-tuning effective_workers {effective_workers} -> {tuned}"
+                )
+                effective_workers = tuned
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
             else:
                 raise SystemExit(f"Parallel verification failed: {exc}") from exc
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+        report = {
+            "requested_workers": args.workers,
+            "effective_workers": effective_workers,
+            "verify_mode": args.verify_parallel_mode,
+            "verify_info": info,
+        }
+        report_path = args.out_dir / "parallel_report.json"
+        report_path.write_text(json.dumps(report, indent=2))
 
     edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)] if args.edge_csv_list else []
     topo_ids = parse_list(args.topology_id_list) if args.topology_id_list else []
