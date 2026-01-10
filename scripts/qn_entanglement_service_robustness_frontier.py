@@ -101,7 +101,11 @@ def main():
         with args.pairs_csv.open() as f:
             reader = csv.DictReader(f)
             for row in reader:
-                pairs.append((row["src"], row["dst"]))
+                src_key = "src" if "src" in row else "src_node"
+                dst_key = "dst" if "dst" in row else "dst_node"
+                if src_key not in row or dst_key not in row:
+                    raise SystemExit("pairs CSV must include src/dst or src_node/dst_node columns")
+                pairs.append((row[src_key], row[dst_key]))
     if args.pairs:
         pairs.extend(parse_pairs(args.pairs))
     if not pairs:

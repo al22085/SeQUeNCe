@@ -101,6 +101,17 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     upgrade_ks = parse_list(args.upgrade_k_list, int)
 
+    # load pairs
+    pairs = []
+    with args.pairs_csv.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            src_key = "src" if "src" in row else "src_node"
+            dst_key = "dst" if "dst" in row else "dst_node"
+            if src_key not in row or dst_key not in row:
+                raise SystemExit("pairs CSV must include src/dst or src_node/dst_node columns")
+            pairs.append({**row, "src": row[src_key], "dst": row[dst_key]})
+
     dist_map = load_distance_dataset(args.distance_dataset_id)
     if args.edge_distance_csv:
         dist_map = load_edge_distances_csv(args.edge_distance_csv)
@@ -118,13 +129,6 @@ def main():
         ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
         for k in upgrade_ks:
             upgrade_edges_cache[k] = set([e for e, _ in ranked[:k]])
-
-    # load pairs
-    pairs = []
-    with args.pairs_csv.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            pairs.append(row)
 
     coverage_rows = []
     for row in pairs:

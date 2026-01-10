@@ -67,9 +67,12 @@ def main():
             continue
         bk0, eqt_frontiers = curve
         ratios = {k: (eqt_frontiers[k] / bk0 if bk0 > 0 else 0.0) for k in ks_sorted}
-        s03 = (eqt_frontiers.get(3, eqt_frontiers[ks_sorted[0]]) - eqt_frontiers[ks_sorted[0]]) / 3
-        s37 = (eqt_frontiers.get(7, eqt_frontiers[3]) - eqt_frontiers.get(3, eqt_frontiers[ks_sorted[0]])) / 4
-        s721 = (eqt_frontiers.get(21, eqt_frontiers.get(7, eqt_frontiers[ks_sorted[0]])) - eqt_frontiers.get(7, eqt_frontiers[ks_sorted[0]])) / 14
+        base_k = ks_sorted[0]
+        def frontier_at(k: int) -> float:
+            return eqt_frontiers.get(k, eqt_frontiers[base_k])
+        s03 = (frontier_at(3) - frontier_at(base_k)) / 3 if 3 in ks_sorted else 0.0
+        s37 = (frontier_at(7) - frontier_at(3)) / 4 if 7 in ks_sorted and 3 in ks_sorted else 0.0
+        s721 = (frontier_at(21) - frontier_at(7)) / 14 if 21 in ks_sorted and 7 in ks_sorted else 0.0
         clipped = False
         if args.load_max is not None:
             threshold = 0.95 * args.load_max
