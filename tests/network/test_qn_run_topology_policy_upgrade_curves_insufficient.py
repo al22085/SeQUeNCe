@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -26,9 +27,21 @@ def _write_minimal_xlsx(path: Path):
         zf.writestr("xl/worksheets/sheet1.xml", sheet)
 
 
+def _md5(path: Path) -> str:
+    h = hashlib.md5()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def test_auto_select_insufficient_topologies_errors():
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
+        real_zip = Path(__file__).resolve().parents[2] / "data" / "topologybench" / "real_topologies.zip"
+        real_md5 = None
+        if real_zip.exists():
+            real_md5 = _md5(real_zip)
         xlsx = base / "TOP_75_ONLYONE.xlsx"
         _write_minimal_xlsx(xlsx)
         zip_path = base / "real_topologies.zip"
@@ -60,6 +73,7 @@ def test_auto_select_insufficient_topologies_errors():
             "--manifest",
             str(manifest_path),
             "--no-download",
+            "--no-copy",
             "--auto-select-topologies",
             "3",
             "--upgrade-policies",
@@ -104,3 +118,5 @@ def test_auto_select_insufficient_topologies_errors():
         proc = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True)
         assert proc.returncode != 0
         assert "TopologyBench zip appears to contain only" in proc.stderr
+        if real_md5:
+            assert _md5(real_zip) == real_md5

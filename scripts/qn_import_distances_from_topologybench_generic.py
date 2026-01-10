@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
+    p.add_argument("--no-copy", action="store_true", help="Do not copy a provided zip into ./data/topologybench/.")
     return p.parse_args()
 
 
@@ -125,7 +126,7 @@ def main():
             manifest_path=args.manifest,
             zip_path=args.zip,
             no_download=args.no_download,
-            copy_into_data=True,
+            copy_into_data=not args.no_copy,
         )
     xlsx = args.xlsx
     if xlsx is None:

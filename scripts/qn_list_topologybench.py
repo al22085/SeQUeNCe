@@ -31,6 +31,7 @@ def parse_args():
     p.add_argument("--out-csv", type=Path, default=None)
     p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
+    p.add_argument("--no-copy", action="store_true", help="Do not copy a provided zip into ./data/topologybench/.")
     return p.parse_args()
 
 
@@ -188,7 +189,12 @@ def list_xlsx_paths(args):
     if args.xlsx_dir:
         return sorted([p for p in args.xlsx_dir.glob("*.xlsx")])
     if args.zip:
-        args.zip = ensure_topologybench_zip(manifest_path=args.manifest, zip_path=args.zip, no_download=args.no_download)
+        args.zip = ensure_topologybench_zip(
+            manifest_path=args.manifest,
+            zip_path=args.zip,
+            no_download=args.no_download,
+            copy_into_data=not args.no_copy,
+        )
         with zipfile.ZipFile(args.zip) as zf:
             names = [n for n in zf.namelist() if n.endswith(".xlsx")]
         # extract under data/ for reproducibility

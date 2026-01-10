@@ -33,7 +33,8 @@ def parse_args():
     p.add_argument("--topologybench-zip", type=Path, default=None, help="Path to real_topologies.zip")
     p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
-    p.add_argument("--auto-select-topologies", type=int, default=3, help="Auto-select K topologies from TopologyBench.")
+    p.add_argument("--no-copy", action="store_true", help="Do not copy a provided zip into ./data/topologybench/.")
+    p.add_argument("--auto-select-topologies", type=int, default=5, help="Auto-select K topologies from TopologyBench.")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
     p.add_argument("--upgrade-k-mode", choices=["full_range", "explicit"], default="full_range")
@@ -82,6 +83,7 @@ def ensure_distance_csv(
     zip_path: Path | None,
     manifest: Path | None,
     no_download: bool,
+    no_copy: bool,
 ) -> Path:
     out_csv = out_dir / f"{topology_id}.csv"
     if out_csv.exists():
@@ -103,6 +105,8 @@ def ensure_distance_csv(
         cmd += ["--xlsx", str(xlsx_path)]
     elif zip_path:
         cmd += ["--zip", str(zip_path)]
+        if no_copy:
+            cmd += ["--no-copy"]
     run_cmd(cmd)
     if not out_csv.exists():
         raise FileNotFoundError(out_csv)
@@ -135,6 +139,8 @@ def main():
                 list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
             elif args.topologybench_zip:
                 list_cmd += ["--zip", str(args.topologybench_zip)]
+                if args.no_copy:
+                    list_cmd += ["--no-copy"]
             if args.manifest:
                 list_cmd += ["--manifest", str(args.manifest)]
             if args.no_download:
@@ -205,6 +211,7 @@ def main():
                     args.topologybench_zip,
                     args.manifest,
                     args.no_download,
+                    args.no_copy,
                 )
             )
 
@@ -261,101 +268,107 @@ def main():
         for policy in policies:
             run_out = topo_dir / policy
             run_out.mkdir(parents=True, exist_ok=True)
-            load_max = args.load_max
-            while True:
-                cmd = [
-                    "python",
-                    "scripts/qn_entanglement_service_robustness_frontier.py",
-                    "--pairs-csv",
-                    str(pairs_csv),
-                    "--etas",
-                    str(args.eta),
-                    "--strategies",
-                    "BK,EQT",
-                    "--upgrade-k-list",
-                    ",".join(str(k) for k in upgrade_ks),
-                    "--targets",
-                    str(args.target),
-                    "--kbits-list",
-                    str(args.kbits),
-                    "--seeds",
-                    args.seeds,
-                    "--binary-search",
-                    "--load-min",
-                    str(args.load_min),
-                    "--load-max",
-                    str(load_max),
-                    "--load-tol",
-                    str(args.load_tol),
-                    "--horizon-s",
-                    str(args.horizon_s),
-                    "--tau-s",
-                    str(args.tau_s),
-                    "--attempt-rate-opt-hz",
-                    str(args.attempt_rate_opt_hz),
-                    "--attempt-rate-sc-hz",
-                    str(args.attempt_rate_sc_hz),
-                    "--coherence-opt-s",
-                    str(args.coherence_opt_s),
-                    "--coherence-sc-s",
-                    str(args.coherence_sc_s),
-                    "--loss-db-per-km",
-                    str(args.loss_db_per_km),
-                    "--segment-length-km",
-                    str(args.segment_length_km),
-                    "--edge-distance-csv",
-                    str(edge_csv),
-                    "--distance-dataset-id",
-                    topo_id,
-                    "--network-scope",
-                    "shortest_path",
-                    "--swap-schedule",
-                    "balanced",
-                    "--upgrade-policy",
-                    policy,
-                    "--topology-id",
-                    topo_id,
-                    "--workers",
-                    str(args.workers),
-                    "--out-dir",
-                    str(run_out),
-                ]
-                run_cmd(cmd)
-
-                pair_frontier = run_out / "robust_frontier_pairs.csv"
-                curve_csv = run_out / "upgrade_k_curve_numbers.csv"
-                curve_points = run_out / "curve_points.csv"
-                curve_metrics = run_out / "curve_metrics.csv"
-                run_cmd(
-                    [
+            pair_frontier = run_out / "robust_frontier_pairs.csv"
+            curve_points = run_out / "curve_points.csv"
+            curve_metrics = run_out / "curve_metrics.csv"
+            if pair_frontier.exists() and curve_points.exists() and curve_metrics.exists():
+                metrics_rows = load_csv(curve_metrics)
+                load_max_used = args.load_max
+            else:
+                load_max = args.load_max
+                while True:
+                    cmd = [
                         "python",
-                        "scripts/qn_export_upgrade_k_curve.py",
-                        "--pair-frontier",
-                        str(pair_frontier),
-                        "--out-csv",
-                        str(curve_csv),
-                        "--curve-points-csv",
-                        str(curve_points),
-                        "--curve-metrics-csv",
-                        str(curve_metrics),
-                        "--target",
-                        str(args.target),
-                        "--eta",
+                        "scripts/qn_entanglement_service_robustness_frontier.py",
+                        "--pairs-csv",
+                        str(pairs_csv),
+                        "--etas",
                         str(args.eta),
-                        "--kbits",
-                        str(args.kbits),
-                        "--upgrade-ks",
+                        "--strategies",
+                        "BK,EQT",
+                        "--upgrade-k-list",
                         ",".join(str(k) for k in upgrade_ks),
+                        "--targets",
+                        str(args.target),
+                        "--kbits-list",
+                        str(args.kbits),
+                        "--seeds",
+                        args.seeds,
+                        "--binary-search",
+                        "--load-min",
+                        str(args.load_min),
                         "--load-max",
                         str(load_max),
+                        "--load-tol",
+                        str(args.load_tol),
+                        "--horizon-s",
+                        str(args.horizon_s),
+                        "--tau-s",
+                        str(args.tau_s),
+                        "--attempt-rate-opt-hz",
+                        str(args.attempt_rate_opt_hz),
+                        "--attempt-rate-sc-hz",
+                        str(args.attempt_rate_sc_hz),
+                        "--coherence-opt-s",
+                        str(args.coherence_opt_s),
+                        "--coherence-sc-s",
+                        str(args.coherence_sc_s),
+                        "--loss-db-per-km",
+                        str(args.loss_db_per_km),
+                        "--segment-length-km",
+                        str(args.segment_length_km),
+                        "--edge-distance-csv",
+                        str(edge_csv),
+                        "--distance-dataset-id",
+                        topo_id,
+                        "--network-scope",
+                        "shortest_path",
+                        "--swap-schedule",
+                        "balanced",
+                        "--upgrade-policy",
+                        policy,
+                        "--topology-id",
+                        topo_id,
+                        "--workers",
+                        str(args.workers),
+                        "--out-dir",
+                        str(run_out),
                     ]
-                )
-                metrics_rows = load_csv(curve_metrics)
-                any_clipped = any(r.get("clipped", "").lower() in ("1", "true") for r in metrics_rows)
-                if any_clipped and load_max < args.load_max_cap:
-                    load_max = min(args.load_max_cap, load_max * 2)
-                    continue
-                break
+                    run_cmd(cmd)
+
+                    curve_csv = run_out / "upgrade_k_curve_numbers.csv"
+                    run_cmd(
+                        [
+                            "python",
+                            "scripts/qn_export_upgrade_k_curve.py",
+                            "--pair-frontier",
+                            str(pair_frontier),
+                            "--out-csv",
+                            str(curve_csv),
+                            "--curve-points-csv",
+                            str(curve_points),
+                            "--curve-metrics-csv",
+                            str(curve_metrics),
+                            "--target",
+                            str(args.target),
+                            "--eta",
+                            str(args.eta),
+                            "--kbits",
+                            str(args.kbits),
+                            "--upgrade-ks",
+                            ",".join(str(k) for k in upgrade_ks),
+                            "--load-max",
+                            str(load_max),
+                        ]
+                    )
+                    metrics_rows = load_csv(curve_metrics)
+                    any_clipped = any(r.get("clipped", "").lower() in ("1", "true") for r in metrics_rows)
+                    load_max_used = load_max
+                    if any_clipped and load_max < args.load_max_cap:
+                        load_max = min(args.load_max_cap, load_max * 2)
+                        continue
+                    break
+
 
             for metric in ("median", "worst_case"):
                 row = next((r for r in metrics_rows if r["pair"] == metric), None)
@@ -376,7 +389,7 @@ def main():
                         "curvature": row.get("curvature", ""),
                         "classification": row.get("classification", ""),
                         "clipped": row.get("clipped", ""),
-                        "load_max_used": load_max,
+                        "load_max_used": load_max_used,
                         "pairs_csv": str(pairs_csv),
                         "curve_points_csv": str(curve_points),
                         "curve_metrics_csv": str(curve_metrics),

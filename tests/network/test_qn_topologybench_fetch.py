@@ -15,6 +15,8 @@ def _md5(path: Path) -> str:
 def test_topologybench_fetch_with_local_zip():
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
+        real_zip = Path(__file__).resolve().parents[2] / "data" / "topologybench" / "real_topologies.zip"
+        real_md5 = _md5(real_zip) if real_zip.exists() else None
         zip_path = base / "real_topologies.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("TOP_75_TOY1.xlsx", "dummy")
@@ -38,5 +40,8 @@ def test_topologybench_fetch_with_local_zip():
             "--manifest",
             str(manifest),
             "--no-download",
+            "--no-copy",
         ]
         subprocess.run(cmd, check=True, cwd=Path(__file__).resolve().parents[2])
+        if real_md5:
+            assert _md5(real_zip) == real_md5

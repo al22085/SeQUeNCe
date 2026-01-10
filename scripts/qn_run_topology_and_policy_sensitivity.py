@@ -28,6 +28,7 @@ def parse_args():
     p.add_argument("--topologybench-xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
     p.add_argument("--topologybench-zip", type=Path, default=None, help="Path to real_topologies.zip")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download TopologyBench data.")
+    p.add_argument("--no-copy", action="store_true", help="Do not copy a provided zip into ./data/topologybench/.")
     p.add_argument("--auto-select-topologies", type=int, default=0, help="Auto-select K topologies from TopologyBench")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
@@ -92,6 +93,8 @@ def main():
             list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
         elif args.topologybench_zip:
             list_cmd += ["--zip", str(args.topologybench_zip)]
+            if args.no_copy:
+                list_cmd += ["--no-copy"]
         if args.no_download:
             list_cmd += ["--no-download"]
         run_cmd(list_cmd)
@@ -130,6 +133,8 @@ def main():
                     import_cmd += ["--xlsx", str(args.topologybench_xlsx_dir / f"TOP_75_{topo_id}.xlsx")]
                 elif args.topologybench_zip:
                     import_cmd += ["--zip", str(args.topologybench_zip)]
+                    if args.no_copy:
+                        import_cmd += ["--no-copy"]
                 if args.no_download:
                     import_cmd += ["--no-download"]
                 run_cmd(import_cmd)

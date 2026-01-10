@@ -51,6 +51,10 @@ def _md5(path: Path) -> str:
 def test_auto_select_with_fake_zip_smoke():
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
+        real_zip = Path(__file__).resolve().parents[2] / "data" / "topologybench" / "real_topologies.zip"
+        real_md5 = None
+        if real_zip.exists():
+            real_md5 = _md5(real_zip)
         xlsx_dir = base / "xlsx"
         xlsx_dir.mkdir(parents=True, exist_ok=True)
         rows = [
@@ -88,6 +92,7 @@ def test_auto_select_with_fake_zip_smoke():
             "--manifest",
             str(manifest_path),
             "--no-download",
+            "--no-copy",
             "--auto-select-topologies",
             "5",
             "--min-nodes",
@@ -147,3 +152,5 @@ def test_auto_select_with_fake_zip_smoke():
         data = json.loads(kjson.read_text())
         assert data["kmax"] == 3
         assert data["upgrade_k_count"] == 4
+        if real_md5:
+            assert _md5(real_zip) == real_md5
