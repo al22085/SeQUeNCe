@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_topologies import load_edge_distances_csv, build_topology_from_dist_map
-from sequence.qn.parallel import verify_parallelism, get_mp_context
+from sequence.qn.parallel import verify_parallelism, get_mp_context, normalize_workers
 
 
 def parse_float_list(raw: str) -> List[float]:
@@ -114,11 +114,11 @@ def parse_args():
     p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
     p.add_argument(
         "--verify-parallel-mode",
-        choices=["pid_only", "speedup"],
-        default="pid_only",
-        help="Parallel preflight mode (default: pid_only).",
+        choices=["pid_only", "pid_activity", "speedup"],
+        default="pid_activity",
+        help="Parallel preflight mode (default: pid_activity).",
     )
-    p.add_argument("--verify-parallel-task-seconds", type=float, default=1.0, help="CPU spin seconds per preflight task.")
+    p.add_argument("--verify-parallel-task-seconds", type=float, default=3.0, help="CPU spin seconds per preflight task.")
     p.add_argument("--verify-parallel-num-tasks", type=int, default=0, help="Override number of preflight tasks (0=auto).")
     p.add_argument("--verify-parallel-overhead", type=float, default=3.0, help="Overhead factor for speedup mode.")
     p.add_argument(
@@ -208,12 +208,16 @@ def ensure_distance_csv(
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
     if args.verify_parallel:
         try:
             info = verify_parallelism(
-                args.workers,
+                effective_workers,
                 mode=args.verify_parallel_mode,
                 task_seconds=args.verify_parallel_task_seconds,
                 num_tasks=(args.verify_parallel_num_tasks or None),
@@ -225,6 +229,13 @@ def main():
                 f"mode={info['verify_mode']} effective_workers={info['effective_workers']} "
                 f"pids={info['worker_pids']} start_method={info['start_method']}"
             )
+            if info.get("verify_mode") == "pid_activity":
+                print(
+                    f"Parallel activity: active_workers={info.get('active_workers')} "
+                    f"aggregate_cpu={info.get('aggregate_cpu'):.1f}%"
+                )
+                if info.get("ps_snapshot"):
+                    print("Parallel activity ps snapshot:\n" + info["ps_snapshot"])
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
@@ -538,22 +549,13 @@ def main():
                         "--topology-id",
                         topo_id,
                         "--workers",
-                        str(args.workers),
+                        str(effective_workers),
                         "--out-dir",
                         str(run_out),
                     ]
                     if args.binary_search:
                         cmd.append("--binary-search")
-                    if not args.verify_parallel:
-                        cmd.append("--no-verify-parallel")
-                    if args.verify_parallel_mode:
-                        cmd += ["--verify-parallel-mode", args.verify_parallel_mode]
-                    if args.verify_parallel_task_seconds:
-                        cmd += ["--verify-parallel-task-seconds", str(args.verify_parallel_task_seconds)]
-                    if args.verify_parallel_num_tasks:
-                        cmd += ["--verify-parallel-num-tasks", str(args.verify_parallel_num_tasks)]
-                    if args.verify_parallel_overhead:
-                        cmd += ["--verify-parallel-overhead", str(args.verify_parallel_overhead)]
+                    cmd.append("--no-verify-parallel")
                     if args.mp_start_method:
                         cmd += ["--mp-start-method", args.mp_start_method]
                     if args.allow_thread_fallback:

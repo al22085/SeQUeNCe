@@ -30,7 +30,7 @@ from scripts.qn_topologies import (
     edge_usage_counts,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
-from sequence.qn.parallel import verify_parallelism, get_mp_context
+from sequence.qn.parallel import verify_parallelism, get_mp_context, normalize_workers
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 
 
@@ -279,7 +279,7 @@ def parse_args():
     p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
     p.add_argument(
         "--verify-parallel-mode",
-        choices=["pid_only", "speedup"],
+        choices=["pid_only", "pid_activity", "speedup"],
         default="pid_only",
         help="Parallel preflight mode (default: pid_only).",
     )
@@ -302,12 +302,16 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
     if args.verify_parallel:
         try:
             info = verify_parallelism(
-                args.workers,
+                effective_workers,
                 mode=args.verify_parallel_mode,
                 task_seconds=args.verify_parallel_task_seconds,
                 num_tasks=(args.verify_parallel_num_tasks or None),
@@ -319,6 +323,13 @@ def main():
                 f"mode={info['verify_mode']} effective_workers={info['effective_workers']} "
                 f"pids={info['worker_pids']} start_method={info['start_method']}"
             )
+            if info.get("verify_mode") == "pid_activity":
+                print(
+                    f"Parallel activity: active_workers={info.get('active_workers')} "
+                    f"aggregate_cpu={info.get('aggregate_cpu'):.1f}%"
+                )
+                if info.get("ps_snapshot"):
+                    print("Parallel activity ps snapshot:\n" + info["ps_snapshot"])
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
@@ -442,19 +453,21 @@ def main():
                             )
                         )
 
-    max_workers = min(max(2, args.workers), 10)
     mp_ctx = get_mp_context(args.mp_start_method or None)
-    print(f"Using effective_workers={max_workers} start_method={mp_ctx.get_start_method()}")
+    print(
+        f"Using pool_kind=process effective_workers={effective_workers} "
+        f"start_method={mp_ctx.get_start_method()} task_count={len(tasks)} chunksize=1"
+    )
     results = []
     try:
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_ctx) as ex:
+        with ProcessPoolExecutor(max_workers=effective_workers, mp_context=mp_ctx) as ex:
             fut_map = {ex.submit(_eval_robustness_task, t): t for t in tasks}
             for fut in as_completed(fut_map):
                 results.append(fut.result())
     except Exception as exc:
         if args.allow_thread_fallback:
             print(f"ProcessPool failed ({exc}); falling back to ThreadPool")
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            with ThreadPoolExecutor(max_workers=effective_workers) as ex:
                 fut_map = {ex.submit(_eval_robustness_task, t): t for t in tasks}
                 for fut in as_completed(fut_map):
                     results.append(fut.result())

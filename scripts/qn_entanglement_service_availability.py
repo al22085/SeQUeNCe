@@ -26,6 +26,7 @@ from scripts.qn_topologies import (
     pick_upgrade_edges,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
+from sequence.qn.parallel import normalize_workers
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 
 
@@ -75,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dst-node", type=str, default="14")
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--preset", type=str, default="")
-    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..20).")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service"))
     p.add_argument("--resume", action="store_true")
     return p.parse_args()
@@ -83,8 +84,13 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+    args.workers = effective_workers
     args = apply_preset(args, args.preset)
     seeds = parse_list(args.seeds, int) if args.seeds else [args.seed]
     dist_map = {}

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from scripts.qn_experiment_presets import apply_preset
 from scripts.qn_topologies import nsfnet_topology
 from sequence.qn.key_service import simulate_key_service
+from sequence.qn.parallel import normalize_workers
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_key_service"))
     p.add_argument("--resume", action="store_true", help="Append incremental raw logs.")
     p.add_argument("--preset", type=str, default="", help="Named preset for key-service runs.")
-    p.add_argument("--workers", type=int, default=2, help="Reserved for future parallelism (2..10).")
+    p.add_argument("--workers", type=int, default=2, help="Reserved for future parallelism (2..20).")
     return p.parse_args()
 
 
@@ -105,9 +106,13 @@ def main():
 
     summary = result.copy()
     summary.pop("logs", None)
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
-    summary["effective_workers"] = min(args.workers, 10)
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+    summary["effective_workers"] = effective_workers
     with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
     print(f"Wrote {raw_path}")

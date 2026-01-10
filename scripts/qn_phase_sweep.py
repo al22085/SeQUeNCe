@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.qn_network_availability_sequence import run_trials
 from scripts.qn_experiment_presets import apply_preset
+from sequence.qn.parallel import normalize_workers
 
 
 def parse_list(raw: str, cast=float) -> List:
@@ -109,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--p-bsm", type=float, default=0.9, help="Logged BSM success prob (placeholder).")
     p.add_argument("--key-bits-per-pair", type=float, default=1.0, help="Logged for validation use.")
     p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
-    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..20).")
     p.add_argument("--resume", action="store_true", help="Resume from existing raw CSV to skip completed cells.")
     p.add_argument("--base-seed", type=int, default=0, help="Base seed used to derive deterministic per-cell seeds.")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_phase_sweep"))
@@ -226,11 +227,14 @@ def main():
 
         results: List[Tuple] = []
         if tasks:
-            if args.workers < 2 or args.workers > 10:
-                raise SystemExit("workers must be between 2 and 10")
-            max_workers = min(args.workers, 10)
-            print(f"Using effective_workers={max_workers}")
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            try:
+                effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+            except RuntimeError as exc:
+                raise SystemExit(str(exc)) from exc
+            if cpu_limit is not None and effective_workers < args.workers:
+                print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+            print(f"Using pool_kind=process effective_workers={effective_workers} task_count={len(tasks)} chunksize=1")
+            with ProcessPoolExecutor(max_workers=effective_workers) as ex:
                 future_map = {ex.submit(run_cell, t): t for t in tasks}
                 for fut in as_completed(future_map):
                     row = fut.result()

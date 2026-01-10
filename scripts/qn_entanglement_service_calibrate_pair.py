@@ -27,6 +27,7 @@ from scripts.qn_topologies import (
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
+from sequence.qn.parallel import normalize_workers
 
 
 def parse_list(raw: str, cast=float):
@@ -82,8 +83,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+    args.workers = effective_workers
     etas = parse_list(args.etas, float)
     loads = parse_list(args.loads, float)
     seeds = parse_list(args.seeds, int)

@@ -29,6 +29,7 @@ from scripts.qn_topologies import (
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
+from sequence.qn.parallel import normalize_workers
 
 
 def parse_list(raw: str, cast=float) -> List:
@@ -222,12 +223,15 @@ def main():
             res["bits_delivered"],
         )
 
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
     results = []
-    max_workers = min(args.workers, 10)
-    print(f"Using effective_workers={max_workers}")
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+    print(f"Using pool_kind=process effective_workers={effective_workers} task_count={len(tasks)} chunksize=1")
+    with ProcessPoolExecutor(max_workers=effective_workers) as ex:
         fut_map = {ex.submit(run_task, t): t for t in tasks}
         for fut in as_completed(fut_map):
             row = fut.result()

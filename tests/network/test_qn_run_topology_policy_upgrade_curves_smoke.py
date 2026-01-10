@@ -21,6 +21,7 @@ def test_run_topology_policy_upgrade_curves_smoke():
         cmd = [
             "python",
             "scripts/qn_run_topology_policy_upgrade_curves.py",
+            "--no-verify-parallel",
             "--edge-csv-list",
             str(edge_csv),
             "--topology-id-list",

@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from scripts.qn_experiment_presets import apply_preset
 from scripts.qn_topologies import nsfnet_topology, nsfnet_edges
 from sequence.qn.key_service import compute_link_key_rate, simulate_key_service
+from sequence.qn.parallel import normalize_workers
 
 
 def parse_list(raw: str, cast=float) -> List:
@@ -140,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--upgrade-mult", type=float, default=None)
     p.add_argument("--upgrade-edges", type=str, default="")
     p.add_argument("--preset", type=str, default="", help="Named preset.")
-    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..10).")
+    p.add_argument("--workers", type=int, default=2, help="Parallel workers (2..20).")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_key_service_frontier"))
     p.add_argument("--resume", action="store_true")
     p.add_argument("--base-seed", type=int, default=0)
@@ -165,8 +166,13 @@ def main():
     total_cells = len(strategies) * len(lambdas) * len(kmax_list) * len(targets)
     if total_cells > 1 and args.workers < 2:
         raise ValueError("Workers must be >=2 for non-trivial frontier runs")
-    if args.workers < 2 or args.workers > 10:
-        raise ValueError("Workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+    args.workers = effective_workers
 
     base_rates = {e: compute_link_key_rate("BK", {}, args.strategy_params, args.base_key_rate_bps) for e in edges}
     scenarios = apply_upgrades(base_rates, topo, args)
@@ -337,8 +343,8 @@ def main():
                     for target_A in targets:
                         tasks.append((scenario_name, rates, strat, lamb, kmax, target_A))
 
-    max_workers = min(args.workers, 10)
-    print(f"Using effective_workers={max_workers}")
+    max_workers = args.workers
+    print(f"Using pool_kind=process effective_workers={max_workers} task_count={len(tasks)} chunksize=1")
 
     results = []
 

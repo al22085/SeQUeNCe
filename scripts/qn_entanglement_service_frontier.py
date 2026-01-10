@@ -30,7 +30,7 @@ from scripts.qn_entanglement_service_sweep import (
     ci95,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
-from sequence.qn.parallel import get_mp_context
+from sequence.qn.parallel import get_mp_context, normalize_workers
 from sequence.qn.entanglement_service import EdgeParams
 from sequence.qn.entanglement_service import SwapParams, simulate_entanglement_service
 
@@ -297,11 +297,14 @@ def main():
                 for tgt in targets:
                     tasks.append((strat, kb, uk, tgt))
 
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
-    max_workers = min(args.workers, 10)
+    try:
+        max_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and max_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={max_workers}")
     mp_ctx = get_mp_context(args.mp_start_method or None)
-    print(f"Using effective_workers={max_workers} start_method={mp_ctx.get_start_method()}")
+    print(f"Using pool_kind=process effective_workers={max_workers} start_method={mp_ctx.get_start_method()}")
 
     def run_task(task):
         strat, kb, uk, tgt = task
@@ -311,6 +314,7 @@ def main():
     if max_workers > 1:
         try:
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_ctx) as ex:
+                print(f"task_count={len(tasks)} chunksize=1")
                 fut_map = {ex.submit(run_task, t): t for t in tasks}
                 for fut in as_completed(fut_map):
                     results.append(fut.result())

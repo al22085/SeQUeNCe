@@ -10,6 +10,7 @@ from typing import List
 
 import numpy as np
 
+from sequence.qn.parallel import normalize_workers
 
 def parse_args():
     p = argparse.ArgumentParser(description="Compare upgrade policies for a single topology.")
@@ -66,8 +67,12 @@ def compute_curvature(agg_rows, upgrade_ks):
 
 def main():
     args = parse_args()
-    if args.workers < 2 or args.workers > 10:
-        raise SystemExit("workers must be between 2 and 10")
+    try:
+        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if cpu_limit is not None and effective_workers < args.workers:
+        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     policies = parse_list(args.upgrade_policies)
     upgrade_ks = [int(x) for x in parse_list(args.upgrade_k_list)]
@@ -129,7 +134,7 @@ def main():
             "--topology-id",
             args.topology_id,
             "--workers",
-            str(args.workers),
+            str(effective_workers),
             "--out-dir",
             str(out_dir),
         ]

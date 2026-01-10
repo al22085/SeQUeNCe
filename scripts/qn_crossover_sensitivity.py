@@ -12,6 +12,7 @@ from typing import List
 
 import numpy as np
 
+from sequence.qn.parallel import normalize_workers
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -90,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dqt-eta-dest", type=float, default=0.8)
     p.add_argument("--preset", type=str, default="", help="Named preset from qn_experiment_presets.py")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_crossover_sensitivity"))
-    p.add_argument("--workers", type=int, default=4, help="Parallel workers (2..10) for inner sweeps.")
+    p.add_argument("--workers", type=int, default=4, help="Parallel workers (2..20) for inner sweeps.")
     return p.parse_args()
 
 
@@ -103,12 +104,13 @@ def main():
     sens_rows = []
     for v in values:
         sweep_dir = out_dir / f"{args.knob}_{v}"
-        # force inner worker cap between 2 and 10
-        inner_workers = args.workers
-        if inner_workers < 2:
-            inner_workers = 2
-        if inner_workers > 10:
-            inner_workers = 10
+        # force inner worker cap between 2 and 20
+        try:
+            inner_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        if cpu_limit is not None and inner_workers < args.workers:
+            print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={inner_workers}")
         env = dict(**os.environ, WORKERS=str(inner_workers))
         run_phase(args, sweep_dir, args.knob, v, env)
         agg_path = sweep_dir / "phase_agg.csv"
