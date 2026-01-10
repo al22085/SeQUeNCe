@@ -150,9 +150,10 @@ def main():
                 "topology_id": row["topology_id"],
                 "policy": row["policy"],
                 "metric": row["metric"],
-                "ratio21": row.get("ratio21", ""),
+                "ratio21": row.get("ratio_k21", row.get("ratio21", "")),
                 "c1": c1,
                 "c2": c2,
+                "flat_then_jump": row.get("flat_then_jump", ""),
                 "curve_shape": classify_curve(c1, c2),
             }
         )
@@ -160,7 +161,7 @@ def main():
     with curvature_path.open("w", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["topology_id", "policy", "metric", "ratio21", "c1", "c2", "curve_shape"],
+            fieldnames=["topology_id", "policy", "metric", "ratio21", "c1", "c2", "flat_then_jump", "curve_shape"],
         )
         writer.writeheader()
         writer.writerows(curvature_rows)

@@ -106,9 +106,22 @@ def parse_edges(xlsx_path: Path):
     u_idx = v_idx = d_idx = None
     header_row_idx = None
     for idx, row in enumerate(rows):
-        u_idx = match_idx(row, ["source", "src", "u", "node1", "from"])
-        v_idx = match_idx(row, ["destination", "dst", "v", "node2", "to"])
-        d_idx = match_idx(row, ["linklengthinkm", "distance_km", "length_km", "linklength", "distance"])
+        u_idx = match_idx(row, ["source", "src", "u", "node1", "node_1", "from", "tail"])
+        v_idx = match_idx(row, ["destination", "dst", "v", "node2", "node_2", "to", "head"])
+        d_idx = match_idx(
+            row,
+            [
+                "linklengthinkm",
+                "distance_km",
+                "length_km",
+                "linklength",
+                "link length",
+                "length (km)",
+                "length",
+                "computed length",
+                "distance",
+            ],
+        )
         if u_idx is not None and v_idx is not None and d_idx is not None:
             header_row_idx = idx
             break
@@ -119,7 +132,7 @@ def parse_edges(xlsx_path: Path):
                 u_idx, v_idx, d_idx = 1, 2, 3
                 break
         if header_row_idx is None:
-            raise SystemExit("Expected columns source/destination (or u/v) and distance in XLSX")
+            return [], []
 
     edges = []
     nodes = set()
@@ -180,11 +193,14 @@ def list_xlsx_paths(args):
             names = [n for n in zf.namelist() if n.endswith(".xlsx")]
         # extract under data/ for reproducibility
         out_dir = args.zip.parent / "_tb_xlsx_extract"
+        if out_dir.exists():
+            import shutil
+            shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(args.zip) as zf:
             for name in names:
                 zf.extract(name, out_dir)
-        return sorted(out_dir.glob("*.xlsx"))
+        return sorted(out_dir.rglob("*.xlsx"))
     # fall back to pinned manifest
     zip_path = ensure_topologybench_zip(manifest_path=args.manifest, no_download=args.no_download)
     args.zip = zip_path

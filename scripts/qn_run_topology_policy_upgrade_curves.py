@@ -21,7 +21,9 @@ def parse_args():
     p.add_argument("--topology-id-list", type=str, default="", help="Comma list of topology ids (optional).")
     p.add_argument("--topologybench-xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
     p.add_argument("--topologybench-zip", type=Path, default=None, help="Path to real_topologies.zip")
-    p.add_argument("--auto-select-topologies", type=int, default=0, help="Auto-select K topologies from TopologyBench.")
+    p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
+    p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
+    p.add_argument("--auto-select-topologies", type=int, default=3, help="Auto-select K topologies from TopologyBench.")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
     p.add_argument("--eta", type=float, default=0.9)
@@ -30,6 +32,8 @@ def parse_args():
     p.add_argument("--seeds", type=str, default="0,1,2,3")
     p.add_argument("--targets-km", type=str, default="404,511,1002")
     p.add_argument("--pairs-per-target", type=int, default=1)
+    p.add_argument("--min-nodes", type=int, default=10, help="Min nodes when auto-selecting diverse topologies.")
+    p.add_argument("--max-nodes", type=int, default=30, help="Max nodes when auto-selecting diverse topologies.")
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
     p.add_argument("--attempt-rate-opt-hz", type=float, default=5000)
@@ -64,6 +68,8 @@ def ensure_distance_csv(
     out_dir: Path,
     xlsx_dir: Path | None,
     zip_path: Path | None,
+    manifest: Path | None,
+    no_download: bool,
 ) -> Path:
     out_csv = out_dir / f"{topology_id}.csv"
     if out_csv.exists():
@@ -76,6 +82,10 @@ def ensure_distance_csv(
         "--out-dir",
         str(out_dir),
     ]
+    if manifest:
+        cmd += ["--manifest", str(manifest)]
+    if no_download:
+        cmd += ["--no-download"]
     if xlsx_dir:
         xlsx_path = xlsx_dir / f"TOP_75_{topology_id}.xlsx"
         cmd += ["--xlsx", str(xlsx_path)]
@@ -99,17 +109,45 @@ def main():
 
     if edge_csvs and topo_ids and len(edge_csvs) != len(topo_ids):
         raise SystemExit("edge-csv-list length must match topology-id-list")
+    if args.no_download and not args.topologybench_xlsx_dir and not args.topologybench_zip and not edge_csvs:
+        raise SystemExit("No topology source provided with --no-download; supply --edge-csv-list or --topologybench-zip.")
 
     if not edge_csvs and not topo_ids:
         if args.auto_select_topologies <= 0:
             raise SystemExit("Provide --edge-csv-list/--topology-id-list or --auto-select-topologies")
         list_csv = args.out_dir / "topologybench_list.csv"
-        list_cmd = ["python", "scripts/qn_list_topologybench.py", "--out-csv", str(list_csv)]
-        if args.topologybench_xlsx_dir:
-            list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
-        elif args.topologybench_zip:
-            list_cmd += ["--zip", str(args.topologybench_zip)]
-        run_cmd(list_cmd)
+
+        def run_list() -> List[Dict[str, str]]:
+            list_cmd = ["python", "scripts/qn_list_topologybench.py", "--out-csv", str(list_csv)]
+            if args.topologybench_xlsx_dir:
+                list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
+            elif args.topologybench_zip:
+                list_cmd += ["--zip", str(args.topologybench_zip)]
+            if args.manifest:
+                list_cmd += ["--manifest", str(args.manifest)]
+            if args.no_download:
+                list_cmd += ["--no-download"]
+            run_cmd(list_cmd)
+            return load_csv(list_csv)
+
+        rows = run_list()
+        if len(rows) < args.auto_select_topologies:
+            if not args.no_download:
+                fetch_cmd = [
+                    "python",
+                    "scripts/qn_topologybench_fetch.py",
+                    "--force-download",
+                ]
+                if args.manifest:
+                    fetch_cmd += ["--manifest", str(args.manifest)]
+                run_cmd(fetch_cmd)
+                rows = run_list()
+            if len(rows) < args.auto_select_topologies:
+                raise SystemExit(
+                    f"TopologyBench zip appears to contain only {len(rows)} topologies "
+                    f"(likely a test fixture). Please fetch the pinned full zip via "
+                    f"scripts/qn_topologybench_fetch.py, expected >= {args.auto_select_topologies}."
+                )
 
         selected_csv = args.out_dir / "topologybench_selected.csv"
         run_cmd(
@@ -120,16 +158,19 @@ def main():
                 str(list_csv),
                 "--k",
                 str(args.auto_select_topologies),
+                "--min-nodes",
+                str(args.min_nodes),
+                "--max-nodes",
+                str(args.max_nodes),
                 "--out-csv",
                 str(selected_csv),
             ]
         )
         selected = load_csv(selected_csv)
         topo_ids = [r["topology_id"] for r in selected]
-        if "NSFNET13" not in topo_ids:
-            topo_ids.insert(0, "NSFNET13")
         selection_meta = {
-            "auto_selected_k": args.auto_select_topologies,
+            "requested_k": args.auto_select_topologies,
+            "selected_k": len(topo_ids),
             "selected_topologies": topo_ids,
             "source_list_csv": str(list_csv),
         }
@@ -138,7 +179,16 @@ def main():
     if topo_ids and not edge_csvs:
         dist_dir = Path("data/topologybench_distances")
         for topo_id in topo_ids:
-            edge_csvs.append(ensure_distance_csv(topo_id, dist_dir, args.topologybench_xlsx_dir, args.topologybench_zip))
+            edge_csvs.append(
+                ensure_distance_csv(
+                    topo_id,
+                    dist_dir,
+                    args.topologybench_xlsx_dir,
+                    args.topologybench_zip,
+                    args.manifest,
+                    args.no_download,
+                )
+            )
 
     if edge_csvs and not topo_ids:
         topo_ids = [p.stem for p in edge_csvs]
@@ -148,7 +198,9 @@ def main():
 
     summary_rows = []
     for topo_id, edge_csv in zip(topo_ids, edge_csvs):
-        pairs_csv = args.out_dir / f"{topo_id}_pairs_repr3.csv"
+        topo_dir = args.out_dir / topo_id
+        topo_dir.mkdir(parents=True, exist_ok=True)
+        pairs_csv = topo_dir / "pairs_repr3.csv"
         run_cmd(
             [
                 "python",
@@ -166,7 +218,7 @@ def main():
             ]
         )
         for policy in policies:
-            run_out = args.out_dir / topo_id / policy
+            run_out = topo_dir / policy
             run_out.mkdir(parents=True, exist_ok=True)
             cmd = [
                 "python",
@@ -255,6 +307,19 @@ def main():
                 row = next((r for r in curve_rows if r["pair"] == metric), None)
                 if not row:
                     continue
+                ratio_k21 = row.get("ratio21", "")
+                flat_then_jump = False
+                try:
+                    eqt0 = float(row.get("eqt0", "0") or 0.0)
+                    eqt3 = float(row.get("eqt3", "0") or 0.0)
+                    eqt7 = float(row.get("eqt7", "0") or 0.0)
+                    eqt21 = float(row.get("eqt21", "0") or 0.0)
+                    eps = 1e-9
+                    flat = abs(eqt0 - eqt3) < eps and abs(eqt3 - eqt7) < eps
+                    jump = eqt21 > eqt7 + eps
+                    flat_then_jump = flat and jump
+                except ValueError:
+                    flat_then_jump = False
                 summary_rows.append(
                     {
                         "topology_id": topo_id,
@@ -272,12 +337,15 @@ def main():
                         "ratio3": row.get("ratio3", ""),
                         "ratio7": row.get("ratio7", ""),
                         "ratio21": row.get("ratio21", ""),
+                        "ratio_k21": ratio_k21,
                         "s03": row.get("s03", ""),
                         "s37": row.get("s37", ""),
                         "s721": row.get("s721", ""),
                         "c1": row.get("c1", ""),
                         "c2": row.get("c2", ""),
                         "clipped": row.get("clipped", ""),
+                        "flat_then_jump": flat_then_jump,
+                        "pairs_csv": str(pairs_csv),
                         "curve_csv": str(curve_csv),
                     }
                 )
@@ -302,12 +370,15 @@ def main():
                 "ratio3",
                 "ratio7",
                 "ratio21",
+                "ratio_k21",
                 "s03",
                 "s37",
                 "s721",
                 "c1",
                 "c2",
                 "clipped",
+                "flat_then_jump",
+                "pairs_csv",
                 "curve_csv",
             ],
         )

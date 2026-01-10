@@ -30,8 +30,11 @@ def ensure_topologybench_zip(
     zip_path: Path | None = None,
     no_download: bool = False,
     copy_into_data: bool = True,
+    force_download: bool = False,
 ) -> Path:
     """Ensure TopologyBench zip exists in data/topologybench with correct checksum."""
+    if force_download and no_download:
+        raise RuntimeError("force_download requires network access (no_download is set).")
     repo_root = Path(__file__).resolve().parents[2]
     default_manifest = repo_root / "data" / "topologybench_manifest.json"
     manifest_path = manifest_path or Path(os.getenv("TOPBENCH_MANIFEST_PATH", default_manifest))
@@ -49,12 +52,16 @@ def ensure_topologybench_zip(
         if not zip_path.exists():
             raise FileNotFoundError(f"Provided TopologyBench zip not found: {zip_path}")
         if copy_into_data:
-            shutil.copy2(zip_path, target_zip)
+            if zip_path.resolve() != target_zip.resolve():
+                shutil.copy2(zip_path, target_zip)
             zip_path = target_zip
         checksum = md5sum(zip_path)
         if checksum != manifest["md5"]:
             raise ValueError(f"TopologyBench md5 mismatch: expected {manifest['md5']} got {checksum}")
         return zip_path
+
+    if force_download:
+        target_zip.unlink(missing_ok=True)
 
     if target_zip.exists():
         checksum = md5sum(target_zip)
@@ -68,9 +75,6 @@ def ensure_topologybench_zip(
             target_zip.unlink(missing_ok=True)
         else:
             return target_zip
-    if target_zip.exists():
-        return target_zip
-        return target_zip
 
     if no_download:
         raise RuntimeError(

@@ -18,6 +18,7 @@ def parse_args():
     p.add_argument("--topologybench-zip", type=Path, default=None, help="Local zip path to use.")
     p.add_argument("--manifest", type=Path, default=None, help="Manifest JSON path override.")
     p.add_argument("--no-download", action="store_true", help="Offline mode; do not download.")
+    p.add_argument("--force-download", action="store_true", help="Force re-download from the pinned manifest.")
     return p.parse_args()
 
 
@@ -28,6 +29,7 @@ def main():
         zip_path=args.topologybench_zip,
         no_download=args.no_download,
         copy_into_data=True,
+        force_download=args.force_download,
     )
     print(path)
 

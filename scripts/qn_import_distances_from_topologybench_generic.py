@@ -147,9 +147,22 @@ def main():
     u_idx = v_idx = d_idx = None
     header_row_idx = None
     for idx, row in enumerate(rows):
-        u_idx = match_idx(row, ["source", "src", "u", "node1", "from"])
-        v_idx = match_idx(row, ["destination", "dst", "v", "node2", "to"])
-        d_idx = match_idx(row, ["linklengthinkm", "distance_km", "length_km", "linklength", "distance"])
+        u_idx = match_idx(row, ["source", "src", "u", "node1", "node_1", "from", "tail"])
+        v_idx = match_idx(row, ["destination", "dst", "v", "node2", "node_2", "to", "head"])
+        d_idx = match_idx(
+            row,
+            [
+                "linklengthinkm",
+                "distance_km",
+                "length_km",
+                "linklength",
+                "link length",
+                "length (km)",
+                "length",
+                "computed length",
+                "distance",
+            ],
+        )
         if u_idx is not None and v_idx is not None and d_idx is not None:
             header_row_idx = idx
             break

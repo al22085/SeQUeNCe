@@ -27,22 +27,29 @@ def main():
         raise SystemExit("No topologies within size range")
 
     # select extremes by diameter and degree
-    rows_sorted_diam = sorted(rows, key=lambda r: float(r["diameter_km"]))
-    rows_sorted_deg = sorted(rows, key=lambda r: float(r["avg_degree"]))
+    rows_sorted_diam = sorted(rows, key=lambda r: (float(r["diameter_km"]), r["topology_id"]))
+    rows_sorted_deg = sorted(rows, key=lambda r: (float(r["avg_degree"]), r["topology_id"]))
+    rows_sorted_nodes = sorted(rows, key=lambda r: (int(r["n_nodes"]), r["topology_id"]))
     selected = []
-    # min diameter
-    selected.append(rows_sorted_diam[0])
-    # max diameter
-    if rows_sorted_diam[-1]["topology_id"] not in {r["topology_id"] for r in selected}:
-        selected.append(rows_sorted_diam[-1])
-    # max degree
-    if rows_sorted_deg[-1]["topology_id"] not in {r["topology_id"] for r in selected}:
-        selected.append(rows_sorted_deg[-1])
-    # fill remaining by median diameter
-    if len(selected) < args.k:
-        mid = rows_sorted_diam[len(rows_sorted_diam) // 2]
-        if mid["topology_id"] not in {r["topology_id"] for r in selected}:
-            selected.append(mid)
+    selected_ids = set()
+    def add_row(row):
+        if row["topology_id"] not in selected_ids:
+            selected.append(row)
+            selected_ids.add(row["topology_id"])
+
+    # extremes
+    add_row(rows_sorted_diam[0])   # min diameter
+    add_row(rows_sorted_diam[-1])  # max diameter
+    add_row(rows_sorted_deg[-1])   # max degree
+    add_row(rows_sorted_nodes[-1]) # max nodes
+    add_row(rows_sorted_nodes[0])  # min nodes
+
+    # fill remaining deterministically by diameter
+    for row in rows_sorted_diam:
+        if len(selected) >= args.k:
+            break
+        add_row(row)
+
     selected = selected[: args.k]
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
