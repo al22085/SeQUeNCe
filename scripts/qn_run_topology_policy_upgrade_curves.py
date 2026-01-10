@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_topologies import load_edge_distances_csv, build_topology_from_dist_map
-from sequence.qn.parallel import verify_parallelism
+from sequence.qn.parallel import verify_parallelism, get_mp_context
 
 
 def parse_float_list(raw: str) -> List[float]:
@@ -112,7 +112,21 @@ def parse_args():
     p.add_argument("--no-binary-search", dest="binary_search", action="store_false", help="Disable binary search.")
     p.add_argument("--verify-parallel", action="store_true", help="Verify ProcessPool parallelism before running.")
     p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
-    p.add_argument("--verify-parallel-seconds", type=float, default=1.0, help="CPU spin seconds for parallel verification.")
+    p.add_argument(
+        "--verify-parallel-mode",
+        choices=["pid_only", "speedup"],
+        default="pid_only",
+        help="Parallel preflight mode (default: pid_only).",
+    )
+    p.add_argument("--verify-parallel-task-seconds", type=float, default=1.0, help="CPU spin seconds per preflight task.")
+    p.add_argument("--verify-parallel-num-tasks", type=int, default=0, help="Override number of preflight tasks (0=auto).")
+    p.add_argument("--verify-parallel-overhead", type=float, default=3.0, help="Overhead factor for speedup mode.")
+    p.add_argument(
+        "--mp-start-method",
+        type=str,
+        default="",
+        help="Multiprocessing start method (e.g., fork, spawn). Empty uses default.",
+    )
     p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--out-dir", type=Path, default=Path("out/topology_policy_upgrade_curves"))
@@ -198,8 +212,19 @@ def main():
         raise SystemExit("workers must be between 2 and 10")
     if args.verify_parallel:
         try:
-            info = verify_parallelism(args.workers, seconds=args.verify_parallel_seconds)
-            print(f"Parallel verify: mode={info['mode']} effective_workers={info['effective_workers']} pids={info['worker_pids']}")
+            info = verify_parallelism(
+                args.workers,
+                mode=args.verify_parallel_mode,
+                task_seconds=args.verify_parallel_task_seconds,
+                num_tasks=(args.verify_parallel_num_tasks or None),
+                overhead_factor=args.verify_parallel_overhead,
+                mp_context=get_mp_context(args.mp_start_method or None),
+            )
+            print(
+                "Parallel verify: "
+                f"mode={info['verify_mode']} effective_workers={info['effective_workers']} "
+                f"pids={info['worker_pids']} start_method={info['start_method']}"
+            )
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
@@ -521,6 +546,16 @@ def main():
                         cmd.append("--binary-search")
                     if not args.verify_parallel:
                         cmd.append("--no-verify-parallel")
+                    if args.verify_parallel_mode:
+                        cmd += ["--verify-parallel-mode", args.verify_parallel_mode]
+                    if args.verify_parallel_task_seconds:
+                        cmd += ["--verify-parallel-task-seconds", str(args.verify_parallel_task_seconds)]
+                    if args.verify_parallel_num_tasks:
+                        cmd += ["--verify-parallel-num-tasks", str(args.verify_parallel_num_tasks)]
+                    if args.verify_parallel_overhead:
+                        cmd += ["--verify-parallel-overhead", str(args.verify_parallel_overhead)]
+                    if args.mp_start_method:
+                        cmd += ["--mp-start-method", args.mp_start_method]
                     if args.allow_thread_fallback:
                         cmd.append("--allow-thread-fallback")
                     run_cmd(cmd)

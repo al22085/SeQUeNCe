@@ -6,7 +6,7 @@ import argparse
 import csv
 import math
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -30,6 +30,7 @@ from scripts.qn_entanglement_service_sweep import (
     ci95,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
+from sequence.qn.parallel import get_mp_context
 from sequence.qn.entanglement_service import EdgeParams
 from sequence.qn.entanglement_service import SwapParams, simulate_entanglement_service
 
@@ -86,6 +87,13 @@ def parse_args():
     p.add_argument("--otp-session-duration-s", type=float, default=0.01)
     p.add_argument("--otp-directions", type=int, default=2)
     p.add_argument("--workers", type=int, default=2)
+    p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
+    p.add_argument(
+        "--mp-start-method",
+        type=str,
+        default="",
+        help="Multiprocessing start method (e.g., fork, spawn). Empty uses default.",
+    )
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_frontier"))
     p.add_argument("--resume", action="store_true")
     return p.parse_args()
@@ -292,7 +300,8 @@ def main():
     if args.workers < 2 or args.workers > 10:
         raise SystemExit("workers must be between 2 and 10")
     max_workers = min(args.workers, 10)
-    print(f"Using effective_workers={max_workers}")
+    mp_ctx = get_mp_context(args.mp_start_method or None)
+    print(f"Using effective_workers={max_workers} start_method={mp_ctx.get_start_method()}")
 
     def run_task(task):
         strat, kb, uk, tgt = task
@@ -300,10 +309,20 @@ def main():
         return strat, tgt, kb, uk, frontier, avail, evals
 
     if max_workers > 1:
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            fut_map = {ex.submit(run_task, t): t for t in tasks}
-            for fut in as_completed(fut_map):
-                results.append(fut.result())
+        try:
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_ctx) as ex:
+                fut_map = {ex.submit(run_task, t): t for t in tasks}
+                for fut in as_completed(fut_map):
+                    results.append(fut.result())
+        except Exception as exc:
+            if args.allow_thread_fallback:
+                print(f"ProcessPool failed ({exc}); falling back to ThreadPool")
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    fut_map = {ex.submit(run_task, t): t for t in tasks}
+                    for fut in as_completed(fut_map):
+                        results.append(fut.result())
+            else:
+                raise SystemExit(f"ProcessPool failed: {exc}") from exc
     else:
         for t in tasks:
             results.append(run_task(t))

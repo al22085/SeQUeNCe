@@ -30,6 +30,7 @@ def test_entanglement_service_frontier_smoke():
             "0.05",
             "--tau-s",
             "0.02",
+            "--allow-thread-fallback",
             "--workers",
             "2",
             "--out-dir",
