@@ -21,6 +21,10 @@ def parse_args():
     p.add_argument("--kbits", type=float, default=1.0)
     p.add_argument("--upgrade-ks", type=str, default="0,3,7,21")
     p.add_argument("--load-max", type=float, default=None, help="Optional load_max used in frontier search for clipping flag.")
+    p.add_argument("--curve-points-csv", type=Path, default=None, help="Optional curve_points.csv output path.")
+    p.add_argument("--curve-metrics-csv", type=Path, default=None, help="Optional curve_metrics.csv output path.")
+    p.add_argument("--r2-threshold", type=float, default=0.98)
+    p.add_argument("--curvature-threshold", type=float, default=0.01)
     return p.parse_args()
 
 
@@ -34,6 +38,9 @@ def main():
     rows = load_rows(args.pair_frontier)
     ks = [int(x) for x in args.upgrade_ks.split(",") if x]
     ks_sorted = sorted(ks)
+    if not ks_sorted:
+        raise SystemExit("upgrade-ks must include at least one value")
+    kmax = ks_sorted[-1]
 
     def pick_vals(strategy: str, k: int, pair: Tuple[str, str] | None = None) -> List[float]:
         vals = [
@@ -61,6 +68,8 @@ def main():
 
     pair_ids = sorted({tuple(r["pair"].split("-")) for r in rows})
     results = []
+    curve_points = []
+    metrics_rows = []
     for pair in pair_ids:
         curve = curve_for_pair(pair)
         if not curve:
@@ -77,6 +86,47 @@ def main():
         if args.load_max is not None:
             threshold = 0.95 * args.load_max
             clipped = any(v >= threshold for v in eqt_frontiers.values()) or bk0 >= threshold
+        # curve points for this pair
+        for k in ks_sorted:
+            frac = k / kmax if kmax > 0 else 0.0
+            curve_points.append(
+                {
+                    "pair": f"{pair[0]}-{pair[1]}",
+                    "upgrade_k": k,
+                    "upgraded_fraction": frac,
+                    "bk0": bk0,
+                    "eqt_frontier": eqt_frontiers[k],
+                    "ratio_vs_bk0": ratios[k],
+                }
+            )
+        # metrics
+        x = np.array([k / kmax if kmax > 0 else 0.0 for k in ks_sorted], dtype=float)
+        y = np.array([ratios[k] for k in ks_sorted], dtype=float)
+        if len(y) >= 2:
+            coeffs = np.polyfit(x, y, 1)
+            y_hat = np.polyval(coeffs, x)
+            ss_res = float(np.sum((y - y_hat) ** 2))
+            ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+            r2 = 1.0 if ss_tot == 0 else 1.0 - ss_res / ss_tot
+        else:
+            r2 = 1.0
+        if len(y) >= 3:
+            second = [y[i + 1] - 2 * y[i] + y[i - 1] for i in range(1, len(y) - 1)]
+            curvature = float(np.mean(np.abs(second)))
+        else:
+            curvature = 0.0
+        classification = "approximately_linear" if (r2 >= args.r2_threshold and curvature <= args.curvature_threshold) else "nonlinear"
+        metrics_rows.append(
+            {
+                "pair": f"{pair[0]}-{pair[1]}",
+                "kmax": kmax,
+                "r2": r2,
+                "curvature": curvature,
+                "classification": classification,
+                "ratio_k21": ratios.get(21, ""),
+                "clipped": clipped,
+            }
+        )
         results.append(
             {
                 "pair": f"{pair[0]}-{pair[1]}",
@@ -105,6 +155,53 @@ def main():
                 row[key] = float(func([r[key] for r in results]))
             agg_rows.append(row)
 
+    # aggregated curve points + metrics
+    if results:
+        for agg_name, func in (("median", np.median), ("worst_case", np.min)):
+            agg_curve = {}
+            for k in ks_sorted:
+                vals = [r[f"ratio{k}"] for r in results]
+                agg_curve[k] = float(func(vals))
+            for k in ks_sorted:
+                frac = k / kmax if kmax > 0 else 0.0
+                curve_points.append(
+                    {
+                        "pair": agg_name,
+                        "upgrade_k": k,
+                        "upgraded_fraction": frac,
+                        "bk0": float(func([r["bk0"] for r in results])),
+                        "eqt_frontier": float(func([r[f"eqt{k}"] for r in results])),
+                        "ratio_vs_bk0": agg_curve[k],
+                    }
+                )
+            x = np.array([k / kmax if kmax > 0 else 0.0 for k in ks_sorted], dtype=float)
+            y = np.array([agg_curve[k] for k in ks_sorted], dtype=float)
+            if len(y) >= 2:
+                coeffs = np.polyfit(x, y, 1)
+                y_hat = np.polyval(coeffs, x)
+                ss_res = float(np.sum((y - y_hat) ** 2))
+                ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+                r2 = 1.0 if ss_tot == 0 else 1.0 - ss_res / ss_tot
+            else:
+                r2 = 1.0
+            if len(y) >= 3:
+                second = [y[i + 1] - 2 * y[i] + y[i - 1] for i in range(1, len(y) - 1)]
+                curvature = float(np.mean(np.abs(second)))
+            else:
+                curvature = 0.0
+            classification = "approximately_linear" if (r2 >= args.r2_threshold and curvature <= args.curvature_threshold) else "nonlinear"
+            metrics_rows.append(
+                {
+                    "pair": agg_name,
+                    "kmax": kmax,
+                    "r2": r2,
+                    "curvature": curvature,
+                    "classification": classification,
+                    "ratio_k21": agg_curve.get(21, ""),
+                    "clipped": float(func([r["clipped"] for r in results])) > 0.0,
+                }
+            )
+
     out_path = args.out_csv
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -129,6 +226,28 @@ def main():
         print("Aggregated (median/worst_case):")
         for r in agg_rows:
             print(r)
+
+    if args.curve_points_csv:
+        args.curve_points_csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.curve_points_csv.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["pair", "upgrade_k", "upgraded_fraction", "bk0", "eqt_frontier", "ratio_vs_bk0"],
+            )
+            writer.writeheader()
+            writer.writerows(curve_points)
+        print(f"Wrote curve points to {args.curve_points_csv}")
+
+    if args.curve_metrics_csv:
+        args.curve_metrics_csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.curve_metrics_csv.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["pair", "kmax", "r2", "curvature", "classification", "ratio_k21", "clipped"],
+            )
+            writer.writeheader()
+            writer.writerows(metrics_rows)
+        print(f"Wrote curve metrics to {args.curve_metrics_csv}")
 
 
 if __name__ == "__main__":

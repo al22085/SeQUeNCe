@@ -71,4 +71,4 @@ def test_run_topology_policy_upgrade_curves_smoke():
         with summary.open() as f:
             rows = list(csv.DictReader(f))
         assert rows
-        assert {"topology_id", "policy", "metric", "ratio21"}.issubset(rows[0].keys())
+        assert {"topology_id", "policy", "metric", "ratio_k21"}.issubset(rows[0].keys())

@@ -26,6 +26,7 @@ from scripts.qn_topologies import (
     build_topology_from_dist_map,
     edge_usage_counts_for_pairs,
     orig_edges_in_path,
+    edge_usage_counts,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
@@ -143,7 +144,10 @@ def main():
 
     upgrade_edges_cache = {}
     if args.upgrade_policy == "global_rank":
-        upgrade_edges_cache = {uk: set(pick_upgrade_edges(topo, "shortestpath_count", uk)) for uk in upgrade_ks}
+        counts = edge_usage_counts(topo)
+        ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        for uk in upgrade_ks:
+            upgrade_edges_cache[uk] = set([e for e, _ in ranked[:uk]])
     elif args.upgrade_policy == "pair_demand":
         counts = edge_usage_counts_for_pairs(expanded_edges, pairs)
         ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))

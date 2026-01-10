@@ -15,6 +15,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Plot topology/policy upgrade-k sensitivity results.")
     p.add_argument("--root-dir", type=Path, default=Path("out/topology_policy_upgrade_curves"))
     p.add_argument("--summary-csv", type=Path, default=None)
+    p.add_argument("--curve-points-glob", type=str, default="**/curve_points.csv")
     p.add_argument("--out-dir", type=Path, default=None)
     return p.parse_args()
 
@@ -22,20 +23,6 @@ def parse_args():
 def load_rows(path: Path) -> List[Dict[str, str]]:
     with path.open() as f:
         return list(csv.DictReader(f))
-
-
-def ratios_from_row(row: Dict[str, str]) -> Dict[int, float]:
-    ratios = {}
-    for key, val in row.items():
-        if not key.startswith("ratio") or key == "ratio_vs_BK0":
-            continue
-        suffix = key.replace("ratio", "")
-        if not suffix.isdigit():
-            continue
-        if val == "":
-            continue
-        ratios[int(suffix)] = float(val)
-    return ratios
 
 
 def classify_curve(c1: float, c2: float) -> str:
@@ -57,24 +44,30 @@ def main():
     policies = sorted({r["policy"] for r in rows})
     metrics = sorted({r["metric"] for r in rows})
 
-    # per-topology plots (policies overlaid)
+    # load curve points (median + worst_case are included as pair labels)
+    curve_points = []
+    for path in args.root_dir.glob(args.curve_points_glob):
+        curve_points.extend(load_rows(path))
+
+    # per-topology plots (policies overlaid, median)
     for topo in topologies:
         for metric in metrics:
             plt.figure(figsize=(6, 4))
             for policy in policies:
-                row = next(
-                    (r for r in rows if r["topology_id"] == topo and r["policy"] == policy and r["metric"] == metric),
-                    None,
-                )
-                if not row:
+                pts = [
+                    p
+                    for p in curve_points
+                    if p["pair"] == metric
+                    and p.get("topology_id", topo) == topo
+                    and p.get("upgrade_policy", policy) == policy
+                ]
+                if not pts:
                     continue
-                ratios = ratios_from_row(row)
-                if not ratios:
-                    continue
-                xs = sorted(ratios.keys())
-                ys = [ratios[k] for k in xs]
+                pts_sorted = sorted(pts, key=lambda x: float(x["upgrade_k"]))
+                xs = [float(p["upgraded_fraction"]) for p in pts_sorted]
+                ys = [float(p["ratio_vs_bk0"]) for p in pts_sorted]
                 plt.plot(xs, ys, marker="o", label=policy)
-            plt.xlabel("upgrade_k")
+            plt.xlabel("upgraded_fraction (k/Kmax)")
             plt.ylabel("EQT/BK0 ratio")
             plt.title(f"{topo} ({metric})")
             plt.legend()
@@ -83,24 +76,25 @@ def main():
             plt.savefig(out_dir / f"{topo}_policy_ratio_{metric}.png")
             plt.close()
 
-    # per-policy plots (topologies overlaid)
+    # per-policy plots (topologies overlaid, median)
     for policy in policies:
         for metric in metrics:
             plt.figure(figsize=(6, 4))
             for topo in topologies:
-                row = next(
-                    (r for r in rows if r["topology_id"] == topo and r["policy"] == policy and r["metric"] == metric),
-                    None,
-                )
-                if not row:
+                pts = [
+                    p
+                    for p in curve_points
+                    if p["pair"] == metric
+                    and p.get("topology_id", topo) == topo
+                    and p.get("upgrade_policy", policy) == policy
+                ]
+                if not pts:
                     continue
-                ratios = ratios_from_row(row)
-                if not ratios:
-                    continue
-                xs = sorted(ratios.keys())
-                ys = [ratios[k] for k in xs]
+                pts_sorted = sorted(pts, key=lambda x: float(x["upgrade_k"]))
+                xs = [float(p["upgraded_fraction"]) for p in pts_sorted]
+                ys = [float(p["ratio_vs_bk0"]) for p in pts_sorted]
                 plt.plot(xs, ys, marker="o", label=topo)
-            plt.xlabel("upgrade_k")
+            plt.xlabel("upgraded_fraction (k/Kmax)")
             plt.ylabel("EQT/BK0 ratio")
             plt.title(f"{policy} ({metric})")
             plt.legend()
@@ -113,19 +107,21 @@ def main():
     pooled_rows = []
     for policy in policies:
         for metric in metrics:
-            ratios_by_k: Dict[int, List[float]] = {}
-            for row in rows:
-                if row["policy"] != policy or row["metric"] != metric:
+            ratios_by_frac: Dict[float, List[float]] = {}
+            for p in curve_points:
+                if p["pair"] != metric:
                     continue
-                for k, v in ratios_from_row(row).items():
-                    ratios_by_k.setdefault(k, []).append(v)
-            for k in sorted(ratios_by_k.keys()):
-                vals = ratios_by_k[k]
+                if p.get("upgrade_policy", policy) != policy:
+                    continue
+                frac = float(p["upgraded_fraction"])
+                ratios_by_frac.setdefault(frac, []).append(float(p["ratio_vs_bk0"]))
+            for frac in sorted(ratios_by_frac.keys()):
+                vals = ratios_by_frac[frac]
                 pooled_rows.append(
                     {
                         "policy": policy,
                         "metric": metric,
-                        "upgrade_k": k,
+                        "upgraded_fraction": frac,
                         "ratio_median": float(np.median(vals)),
                         "ratio_worst": float(np.min(vals)),
                         "ratio_max": float(np.max(vals)),
@@ -135,7 +131,7 @@ def main():
     with pooled_path.open("w", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["policy", "metric", "upgrade_k", "ratio_median", "ratio_worst", "ratio_max"],
+            fieldnames=["policy", "metric", "upgraded_fraction", "ratio_median", "ratio_worst", "ratio_max"],
         )
         writer.writeheader()
         writer.writerows(pooled_rows)
@@ -143,25 +139,25 @@ def main():
     # curvature summary table
     curvature_rows = []
     for row in rows:
-        c1 = float(row.get("c1", 0.0) or 0.0)
-        c2 = float(row.get("c2", 0.0) or 0.0)
+        curvature_val = float(row.get("curvature", 0.0) or 0.0)
         curvature_rows.append(
             {
                 "topology_id": row["topology_id"],
                 "policy": row["policy"],
                 "metric": row["metric"],
                 "ratio21": row.get("ratio_k21", row.get("ratio21", "")),
-                "c1": c1,
-                "c2": c2,
+                "r2": row.get("r2", ""),
+                "curvature": row.get("curvature", ""),
+                "classification": row.get("classification", ""),
                 "flat_then_jump": row.get("flat_then_jump", ""),
-                "curve_shape": classify_curve(c1, c2),
+                "curve_shape": classify_curve(curvature_val, curvature_val),
             }
         )
     curvature_path = out_dir / "policy_topology_curvature_summary.csv"
     with curvature_path.open("w", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["topology_id", "policy", "metric", "ratio21", "c1", "c2", "flat_then_jump", "curve_shape"],
+            fieldnames=["topology_id", "policy", "metric", "ratio21", "r2", "curvature", "classification", "flat_then_jump", "curve_shape"],
         )
         writer.writeheader()
         writer.writerows(curvature_rows)

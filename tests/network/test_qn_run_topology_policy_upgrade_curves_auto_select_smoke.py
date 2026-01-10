@@ -59,7 +59,7 @@ def test_auto_select_with_fake_zip_smoke():
             ["B", "C", 12],
             ["A", "C", 15],
         ]
-        topo_ids = ["TOY1", "TOY2", "TOY3"]
+        topo_ids = ["TOY1", "TOY2", "TOY3", "TOY4", "TOY5"]
         for tid in topo_ids:
             _write_minimal_xlsx(xlsx_dir / f"TOP_75_{tid}.xlsx", rows)
 
@@ -89,15 +89,15 @@ def test_auto_select_with_fake_zip_smoke():
             str(manifest_path),
             "--no-download",
             "--auto-select-topologies",
-            "3",
+            "5",
             "--min-nodes",
             "2",
             "--max-nodes",
             "5",
             "--upgrade-policies",
             "global_rank",
-            "--upgrade-k-list",
-            "0,1",
+            "--upgrade-k-mode",
+            "full_range",
             "--eta",
             "0.9",
             "--target",
@@ -106,6 +106,8 @@ def test_auto_select_with_fake_zip_smoke():
             "1.0",
             "--seeds",
             "0",
+            "--targets-km",
+            "10",
             "--load-min",
             "0.01",
             "--load-max",
@@ -138,3 +140,10 @@ def test_auto_select_with_fake_zip_smoke():
         assert summary.exists()
         selection = out_dir / "topology_selection.json"
         assert selection.exists()
+        # verify full_range k list generated
+        topo_dir = out_dir / "TOY1"
+        kjson = topo_dir / "upgrade_k_list.json"
+        assert kjson.exists()
+        data = json.loads(kjson.read_text())
+        assert data["kmax"] == 3
+        assert data["upgrade_k_count"] == 4

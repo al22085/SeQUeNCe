@@ -9,12 +9,22 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List
 
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.qn_topologies import load_edge_distances_csv
+
 
 def parse_args():
     p = argparse.ArgumentParser(
         description=(
             "Run topology+policy upgrade-k curves across multiple topologies. "
-            "Defaults to SLA Tier2 (A=0.99) and balanced swapping."
+            "Defaults to SLA Tier2 (A=0.99) and balanced swapping. "
+            "If no TopologyBench zip/xlsx is provided, downloads the pinned zip into "
+            "./data/topologybench/ and imports distances into data/topologybench_distances/."
         )
     )
     p.add_argument("--edge-csv-list", type=str, default="", help="Comma list of edge CSVs (u,v,linkLengthInKm).")
@@ -26,6 +36,8 @@ def parse_args():
     p.add_argument("--auto-select-topologies", type=int, default=3, help="Auto-select K topologies from TopologyBench.")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
+    p.add_argument("--upgrade-k-mode", choices=["full_range", "explicit"], default="full_range")
+    p.add_argument("--load-max-cap", type=float, default=50.0, help="Max load_max for auto-escalation when clipped.")
     p.add_argument("--eta", type=float, default=0.9)
     p.add_argument("--target", type=float, default=0.99)
     p.add_argument("--kbits", type=float, default=1.0)
@@ -168,6 +180,12 @@ def main():
         )
         selected = load_csv(selected_csv)
         topo_ids = [r["topology_id"] for r in selected]
+        if len(topo_ids) < args.auto_select_topologies:
+            raise SystemExit(
+                f"TopologyBench zip appears to contain only {len(topo_ids)} topologies "
+                f"(likely a test fixture). Please fetch the pinned full zip via "
+                f"scripts/qn_topologybench_fetch.py, expected >= {args.auto_select_topologies}."
+            )
         selection_meta = {
             "requested_k": args.auto_select_topologies,
             "selected_k": len(topo_ids),
@@ -198,8 +216,31 @@ def main():
 
     summary_rows = []
     for topo_id, edge_csv in zip(topo_ids, edge_csvs):
+        # compute per-topology Kmax from original edges
+        dist_map = load_edge_distances_csv(edge_csv)
+        kmax = len(dist_map)
+        if kmax <= 0:
+            raise SystemExit(f"No edges found in {edge_csv}")
+        if args.upgrade_k_mode == "full_range":
+            upgrade_ks = list(range(0, kmax + 1))
+        else:
+            upgrade_ks = [int(x) for x in parse_list(args.upgrade_k_list)]
         topo_dir = args.out_dir / topo_id
         topo_dir.mkdir(parents=True, exist_ok=True)
+        (topo_dir / "upgrade_k_list.json").write_text(
+            json.dumps(
+                {
+                    "topology_id": topo_id,
+                    "edge_count_original": kmax,
+                    "kmax": kmax,
+                    "upgrade_k_mode": args.upgrade_k_mode,
+                    "upgrade_k_list": upgrade_ks,
+                    "upgrade_k_count": len(upgrade_ks),
+                    "upgrade_policies": policies,
+                },
+                indent=2,
+            )
+        )
         pairs_csv = topo_dir / "pairs_repr3.csv"
         run_cmd(
             [
@@ -220,106 +261,106 @@ def main():
         for policy in policies:
             run_out = topo_dir / policy
             run_out.mkdir(parents=True, exist_ok=True)
-            cmd = [
-                "python",
-                "scripts/qn_entanglement_service_robustness_frontier.py",
-                "--pairs-csv",
-                str(pairs_csv),
-                "--etas",
-                str(args.eta),
-                "--strategies",
-                "BK,EQT",
-                "--upgrade-k-list",
-                args.upgrade_k_list,
-                "--targets",
-                str(args.target),
-                "--kbits-list",
-                str(args.kbits),
-                "--seeds",
-                args.seeds,
-                "--binary-search",
-                "--load-min",
-                str(args.load_min),
-                "--load-max",
-                str(args.load_max),
-                "--load-tol",
-                str(args.load_tol),
-                "--horizon-s",
-                str(args.horizon_s),
-                "--tau-s",
-                str(args.tau_s),
-                "--attempt-rate-opt-hz",
-                str(args.attempt_rate_opt_hz),
-                "--attempt-rate-sc-hz",
-                str(args.attempt_rate_sc_hz),
-                "--coherence-opt-s",
-                str(args.coherence_opt_s),
-                "--coherence-sc-s",
-                str(args.coherence_sc_s),
-                "--loss-db-per-km",
-                str(args.loss_db_per_km),
-                "--segment-length-km",
-                str(args.segment_length_km),
-                "--edge-distance-csv",
-                str(edge_csv),
-                "--distance-dataset-id",
-                topo_id,
-                "--network-scope",
-                "shortest_path",
-                "--swap-schedule",
-                "balanced",
-                "--upgrade-policy",
-                policy,
-                "--topology-id",
-                topo_id,
-                "--workers",
-                str(args.workers),
-                "--out-dir",
-                str(run_out),
-            ]
-            run_cmd(cmd)
-
-            pair_frontier = run_out / "robust_frontier_pairs.csv"
-            curve_csv = run_out / "upgrade_k_curve_numbers.csv"
-            run_cmd(
-                [
+            load_max = args.load_max
+            while True:
+                cmd = [
                     "python",
-                    "scripts/qn_export_upgrade_k_curve.py",
-                    "--pair-frontier",
-                    str(pair_frontier),
-                    "--out-csv",
-                    str(curve_csv),
-                    "--target",
-                    str(args.target),
-                    "--eta",
+                    "scripts/qn_entanglement_service_robustness_frontier.py",
+                    "--pairs-csv",
+                    str(pairs_csv),
+                    "--etas",
                     str(args.eta),
-                    "--kbits",
+                    "--strategies",
+                    "BK,EQT",
+                    "--upgrade-k-list",
+                    ",".join(str(k) for k in upgrade_ks),
+                    "--targets",
+                    str(args.target),
+                    "--kbits-list",
                     str(args.kbits),
-                    "--upgrade-ks",
-                    args.upgrade_k_list,
+                    "--seeds",
+                    args.seeds,
+                    "--binary-search",
+                    "--load-min",
+                    str(args.load_min),
                     "--load-max",
-                    str(args.load_max),
+                    str(load_max),
+                    "--load-tol",
+                    str(args.load_tol),
+                    "--horizon-s",
+                    str(args.horizon_s),
+                    "--tau-s",
+                    str(args.tau_s),
+                    "--attempt-rate-opt-hz",
+                    str(args.attempt_rate_opt_hz),
+                    "--attempt-rate-sc-hz",
+                    str(args.attempt_rate_sc_hz),
+                    "--coherence-opt-s",
+                    str(args.coherence_opt_s),
+                    "--coherence-sc-s",
+                    str(args.coherence_sc_s),
+                    "--loss-db-per-km",
+                    str(args.loss_db_per_km),
+                    "--segment-length-km",
+                    str(args.segment_length_km),
+                    "--edge-distance-csv",
+                    str(edge_csv),
+                    "--distance-dataset-id",
+                    topo_id,
+                    "--network-scope",
+                    "shortest_path",
+                    "--swap-schedule",
+                    "balanced",
+                    "--upgrade-policy",
+                    policy,
+                    "--topology-id",
+                    topo_id,
+                    "--workers",
+                    str(args.workers),
+                    "--out-dir",
+                    str(run_out),
                 ]
-            )
+                run_cmd(cmd)
 
-            curve_rows = load_csv(curve_csv)
+                pair_frontier = run_out / "robust_frontier_pairs.csv"
+                curve_csv = run_out / "upgrade_k_curve_numbers.csv"
+                curve_points = run_out / "curve_points.csv"
+                curve_metrics = run_out / "curve_metrics.csv"
+                run_cmd(
+                    [
+                        "python",
+                        "scripts/qn_export_upgrade_k_curve.py",
+                        "--pair-frontier",
+                        str(pair_frontier),
+                        "--out-csv",
+                        str(curve_csv),
+                        "--curve-points-csv",
+                        str(curve_points),
+                        "--curve-metrics-csv",
+                        str(curve_metrics),
+                        "--target",
+                        str(args.target),
+                        "--eta",
+                        str(args.eta),
+                        "--kbits",
+                        str(args.kbits),
+                        "--upgrade-ks",
+                        ",".join(str(k) for k in upgrade_ks),
+                        "--load-max",
+                        str(load_max),
+                    ]
+                )
+                metrics_rows = load_csv(curve_metrics)
+                any_clipped = any(r.get("clipped", "").lower() in ("1", "true") for r in metrics_rows)
+                if any_clipped and load_max < args.load_max_cap:
+                    load_max = min(args.load_max_cap, load_max * 2)
+                    continue
+                break
+
             for metric in ("median", "worst_case"):
-                row = next((r for r in curve_rows if r["pair"] == metric), None)
+                row = next((r for r in metrics_rows if r["pair"] == metric), None)
                 if not row:
                     continue
-                ratio_k21 = row.get("ratio21", "")
-                flat_then_jump = False
-                try:
-                    eqt0 = float(row.get("eqt0", "0") or 0.0)
-                    eqt3 = float(row.get("eqt3", "0") or 0.0)
-                    eqt7 = float(row.get("eqt7", "0") or 0.0)
-                    eqt21 = float(row.get("eqt21", "0") or 0.0)
-                    eps = 1e-9
-                    flat = abs(eqt0 - eqt3) < eps and abs(eqt3 - eqt7) < eps
-                    jump = eqt21 > eqt7 + eps
-                    flat_then_jump = flat and jump
-                except ValueError:
-                    flat_then_jump = False
                 summary_rows.append(
                     {
                         "topology_id": topo_id,
@@ -328,25 +369,17 @@ def main():
                         "eta": args.eta,
                         "target_A": args.target,
                         "kbits": args.kbits,
-                        "bk0": row["bk0"],
-                        "eqt0": row.get("eqt0", ""),
-                        "eqt3": row.get("eqt3", ""),
-                        "eqt7": row.get("eqt7", ""),
-                        "eqt21": row.get("eqt21", ""),
-                        "ratio0": row.get("ratio0", ""),
-                        "ratio3": row.get("ratio3", ""),
-                        "ratio7": row.get("ratio7", ""),
-                        "ratio21": row.get("ratio21", ""),
-                        "ratio_k21": ratio_k21,
-                        "s03": row.get("s03", ""),
-                        "s37": row.get("s37", ""),
-                        "s721": row.get("s721", ""),
-                        "c1": row.get("c1", ""),
-                        "c2": row.get("c2", ""),
+                        "kmax": kmax,
+                        "upgrade_k_count": len(upgrade_ks),
+                        "ratio_k21": row.get("ratio_k21", ""),
+                        "r2": row.get("r2", ""),
+                        "curvature": row.get("curvature", ""),
+                        "classification": row.get("classification", ""),
                         "clipped": row.get("clipped", ""),
-                        "flat_then_jump": flat_then_jump,
+                        "load_max_used": load_max,
                         "pairs_csv": str(pairs_csv),
-                        "curve_csv": str(curve_csv),
+                        "curve_points_csv": str(curve_points),
+                        "curve_metrics_csv": str(curve_metrics),
                     }
                 )
 
@@ -361,25 +394,17 @@ def main():
                 "eta",
                 "target_A",
                 "kbits",
-                "bk0",
-                "eqt0",
-                "eqt3",
-                "eqt7",
-                "eqt21",
-                "ratio0",
-                "ratio3",
-                "ratio7",
-                "ratio21",
                 "ratio_k21",
-                "s03",
-                "s37",
-                "s721",
-                "c1",
-                "c2",
+                "kmax",
+                "upgrade_k_count",
+                "r2",
+                "curvature",
+                "classification",
                 "clipped",
-                "flat_then_jump",
+                "load_max_used",
                 "pairs_csv",
-                "curve_csv",
+                "curve_points_csv",
+                "curve_metrics_csv",
             ],
         )
         writer.writeheader()

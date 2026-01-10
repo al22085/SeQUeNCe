@@ -78,7 +78,8 @@ def ensure_topologybench_zip(
 
     if no_download:
         raise RuntimeError(
-            "TopologyBench zip missing. Run with --topologybench-zip PATH or enable network."
+            "TopologyBench zip missing. Place it at data/topologybench/real_topologies.zip "
+            f"(md5={manifest['md5']}) or pass --topologybench-zip PATH; enable network to auto-download."
         )
 
     record_id = os.getenv("TOPBENCH_RECORD_ID", manifest["record_id"])

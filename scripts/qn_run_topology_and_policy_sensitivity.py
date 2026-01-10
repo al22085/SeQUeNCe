@@ -17,7 +17,9 @@ def parse_args():
     p = argparse.ArgumentParser(
         description=(
             "Run topology/policy sensitivity for upgrade-k curves. "
-            "Defaults to SLA Tier2 (A=0.99) and pinned TopologyBench manifest."
+            "Defaults to SLA Tier2 (A=0.99) and pinned TopologyBench manifest. "
+            "If no zip/xlsx is provided, downloads the pinned zip into "
+            "./data/topologybench/ and imports distances into data/topologybench_distances/."
         )
     )
     p.add_argument("--edge-csv-list", type=str, default="", help="Comma list of edge CSVs")
@@ -25,6 +27,7 @@ def parse_args():
     p.add_argument("--pairs-csv-list", type=str, default="", help="Comma list of pairs CSVs (optional)")
     p.add_argument("--topologybench-xlsx-dir", type=Path, default=None, help="Directory with TOP_75_*.xlsx")
     p.add_argument("--topologybench-zip", type=Path, default=None, help="Path to real_topologies.zip")
+    p.add_argument("--no-download", action="store_true", help="Offline mode; do not download TopologyBench data.")
     p.add_argument("--auto-select-topologies", type=int, default=0, help="Auto-select K topologies from TopologyBench")
     p.add_argument("--upgrade-policies", type=str, default="global_rank,pair_demand,pair_path_only")
     p.add_argument("--upgrade-k-list", type=str, default="0,3,7,21")
@@ -74,8 +77,10 @@ def main():
 
     if not edge_csvs:
         # auto-select topologies from TopologyBench
-        if not args.topologybench_xlsx_dir and not args.topologybench_zip:
-            raise SystemExit("Provide --edge-csv-list or TopologyBench source (--topologybench-xlsx-dir/--topologybench-zip)")
+        if args.no_download and not args.topologybench_xlsx_dir and not args.topologybench_zip:
+            raise SystemExit(
+                "No topology source provided with --no-download; supply --edge-csv-list or --topologybench-zip."
+            )
         list_csv = args.out_dir / "topologybench_list.csv"
         list_cmd = [
             "python",
@@ -85,8 +90,10 @@ def main():
         ]
         if args.topologybench_xlsx_dir:
             list_cmd += ["--xlsx-dir", str(args.topologybench_xlsx_dir)]
-        else:
+        elif args.topologybench_zip:
             list_cmd += ["--zip", str(args.topologybench_zip)]
+        if args.no_download:
+            list_cmd += ["--no-download"]
         run_cmd(list_cmd)
 
         if args.auto_select_topologies <= 0:
@@ -121,8 +128,10 @@ def main():
                 ]
                 if args.topologybench_xlsx_dir:
                     import_cmd += ["--xlsx", str(args.topologybench_xlsx_dir / f"TOP_75_{topo_id}.xlsx")]
-                else:
+                elif args.topologybench_zip:
                     import_cmd += ["--zip", str(args.topologybench_zip)]
+                if args.no_download:
+                    import_cmd += ["--no-download"]
                 run_cmd(import_cmd)
             edge_csvs.append(out_csv)
             topo_ids.append(topo_id)
