@@ -15,7 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.qn_topologies import load_edge_distances_csv, build_topology_from_dist_map
+from scripts.qn_topologies import load_edge_distances_csv
+from scripts.qn_topology_feasibility import (
+    all_pairs_sp_km,
+    compute_target_feasibility,
+    filter_candidates_by_feasibility,
+    label_for_target,
+)
 from sequence.qn.parallel import (
     ParallelVerificationError,
     verify_parallelism,
@@ -28,47 +34,7 @@ def parse_float_list(raw: str) -> List[float]:
     return [float(x) for x in raw.split(",") if x]
 
 
-def dijkstra(topo: Dict[str, List[str]], dist: Dict[tuple, float], src: str) -> Dict[str, float]:
-    import heapq
-
-    pq = [(0.0, src)]
-    best = {src: 0.0}
-    while pq:
-        d, n = heapq.heappop(pq)
-        if d > best[n]:
-            continue
-        for nei in topo[n]:
-            key = tuple(sorted((n, nei)))
-            w = dist[key]
-            nd = d + w
-            if nei not in best or nd < best[nei]:
-                best[nei] = nd
-                heapq.heappush(pq, (nd, nei))
-    return best
-
-
-def all_pairs_sp_km(dist_map: Dict[tuple, float]) -> List[tuple]:
-    topo = build_topology_from_dist_map(dist_map)
-    nodes = sorted(topo.keys())
-    pairs = []
-    for i in range(len(nodes)):
-        src = nodes[i]
-        best = dijkstra(topo, dist_map, src)
-        for j in range(i + 1, len(nodes)):
-            dst = nodes[j]
-            if dst not in best:
-                continue
-            pairs.append((best[dst] / 1000.0, src, dst))
-    return pairs
-
-
-def within_tol(sp_km: float, target_km: float, abs_tol: float, rel_tol: float) -> bool:
-    abs_err = abs(sp_km - target_km)
-    if abs_tol and abs_err <= abs_tol:
-        return True
-    if rel_tol and target_km > 0:
-        return abs_err / target_km <= rel_tol
-    return False
+ 
 
 
 def parse_args():
@@ -100,6 +66,16 @@ def parse_args():
     p.add_argument("--pairs-per-target", type=int, default=1)
     p.add_argument("--pair-distance-abs-tol-km", type=float, default=0.0)
     p.add_argument("--pair-distance-rel-tol", type=float, default=0.15)
+    p.add_argument(
+        "--require-target-feasible",
+        action="store_true",
+        help="Require all targets to have at least pairs-per-target pairs within tolerance.",
+    )
+    p.add_argument(
+        "--require-long-feasible",
+        action="store_true",
+        help="Require long target to have at least pairs-per-target pairs within tolerance.",
+    )
     p.add_argument("--min-nodes", type=int, default=None, help="Min nodes when auto-selecting diverse topologies.")
     p.add_argument("--max-nodes", type=int, default=None, help="Max nodes when auto-selecting diverse topologies.")
     p.add_argument("--segment-length-km", type=float, default=50.0)
@@ -374,7 +350,7 @@ def main():
         targets = parse_float_list(args.targets_km)
         dist_dir = Path("data/topologybench_distances")
         eligibility_rows = []
-        selection_rows = []
+        candidate_rows = []
         for r in rows:
             topo_id = r["topology_id"]
             edge_csv = ensure_distance_csv(
@@ -389,13 +365,19 @@ def main():
             dist_map = load_edge_distances_csv(edge_csv)
             pairs = all_pairs_sp_km(dist_map)
             diameter_km = max((p[0] for p in pairs), default=0.0)
-            counts = {}
-            ok = True
-            for tgt in targets:
-                count = sum(1 for sp_km, _, _ in pairs if within_tol(sp_km, tgt, args.pair_distance_abs_tol_km, args.pair_distance_rel_tol))
-                counts[str(tgt)] = count
-                if count < args.pairs_per_target:
-                    ok = False
+            feas = compute_target_feasibility(
+                dist_map,
+                targets,
+                args.pairs_per_target,
+                args.pair_distance_abs_tol_km,
+                args.pair_distance_rel_tol,
+                pairs=pairs,
+            )
+            counts = feas["counts_by_label"]
+            missing_by_label = feas["missing_by_label"]
+            missing_total = feas["total_missing"]
+            completeness = feas["completeness"]
+            missing_long = feas["missing_long"]
             eligibility_rows.append(
                 {
                     "topology_id": topo_id,
@@ -403,17 +385,23 @@ def main():
                     "n_edges": r["n_edges"],
                     "avg_degree": r["avg_degree"],
                     "diameter_km": f"{diameter_km:.2f}",
-                    **{f"count_{t}": counts[str(t)] for t in targets},
-                    "eligible": ok,
+                    **{f"count_{t}": counts.get(label_for_target(i, t), 0) for i, t in enumerate(targets)},
+                    "missing_total": missing_total,
+                    "missing_long": missing_long,
+                    "completeness": f"{completeness:.6f}",
+                    "eligible": feas["feasible_all_targets"],
                 }
             )
-            selection_rows.append(
+            candidate_rows.append(
                 {
                     "topology_id": topo_id,
                     "n_nodes": r["n_nodes"],
                     "n_edges": r["n_edges"],
                     "avg_degree": r["avg_degree"],
                     "diameter_km": f"{diameter_km:.2f}",
+                    "missing_total": missing_total,
+                    "missing_long": missing_long,
+                    "completeness": completeness,
                 }
             )
 
@@ -430,16 +418,42 @@ def main():
             writer.writeheader()
             writer.writerows(eligibility_rows)
 
+        filtered_candidates = filter_candidates_by_feasibility(
+            candidate_rows,
+            args.require_long_feasible,
+            args.require_target_feasible,
+        )
+        if args.require_long_feasible or args.require_target_feasible:
+            if len(filtered_candidates) < args.auto_select_topologies:
+                raise SystemExit(
+                    "Not enough topologies satisfy feasibility constraints "
+                    f"(require_long_feasible={args.require_long_feasible}, "
+                    f"require_target_feasible={args.require_target_feasible}). "
+                    "Relax tolerance or constraints, or reduce --auto-select-topologies."
+                )
+            # keep only best-missing candidates if we have more than needed
+            if not args.require_target_feasible:
+                missing_vals = sorted({int(r['missing_total']) for r in filtered_candidates})
+                pool: List[Dict[str, object]] = []
+                for mv in missing_vals:
+                    for row in filtered_candidates:
+                        if int(row["missing_total"]) == mv:
+                            pool.append(row)
+                    if len(pool) >= args.auto_select_topologies:
+                        break
+                filtered_candidates = pool
+
         selection_csv = args.out_dir / "topologybench_list_selection.csv"
         with selection_csv.open("w", newline="") as f:
             fieldnames = ["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(selection_rows)
+            for row in filtered_candidates if (args.require_long_feasible or args.require_target_feasible) else candidate_rows:
+                writer.writerow({k: row[k] for k in fieldnames})
 
-        if len(selection_rows) < args.auto_select_topologies:
+        if len(candidate_rows) < args.auto_select_topologies:
             raise SystemExit(
-                f"Not enough topologies available in list: have {len(selection_rows)}, "
+                f"Not enough topologies available in list: have {len(candidate_rows)}, "
                 f"requested {args.auto_select_topologies}."
             )
 
@@ -472,6 +486,8 @@ def main():
             "selection_list_csv": str(selection_csv),
             "pair_distance_abs_tol_km": args.pair_distance_abs_tol_km,
             "pair_distance_rel_tol": args.pair_distance_rel_tol,
+            "require_target_feasible": args.require_target_feasible,
+            "require_long_feasible": args.require_long_feasible,
             "node_filter": {
                 "min_nodes": args.min_nodes,
                 "max_nodes": args.max_nodes,
@@ -500,6 +516,52 @@ def main():
 
     if len(edge_csvs) != len(topo_ids):
         raise SystemExit("edge-csv-list length must match topology-id-list")
+
+    if (args.require_long_feasible or args.require_target_feasible) and topo_ids:
+        targets = parse_float_list(args.targets_km)
+        feasibility_rows = []
+        for topo_id, edge_csv in zip(topo_ids, edge_csvs):
+            dist_map = load_edge_distances_csv(edge_csv)
+            pairs = all_pairs_sp_km(dist_map)
+            diameter_km = max((p[0] for p in pairs), default=0.0)
+            feas = compute_target_feasibility(
+                dist_map,
+                targets,
+                args.pairs_per_target,
+                args.pair_distance_abs_tol_km,
+                args.pair_distance_rel_tol,
+                pairs=pairs,
+            )
+            feasibility_rows.append(
+                {
+                    "topology_id": topo_id,
+                    "diameter_km": f"{diameter_km:.2f}",
+                    "missing_total": feas["total_missing"],
+                    "missing_long": feas["missing_long"],
+                    "completeness": f"{feas['completeness']:.6f}",
+                }
+            )
+        feasibility_csv = args.out_dir / "topologybench_list_eligibility.csv"
+        with feasibility_csv.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["topology_id", "diameter_km", "missing_total", "missing_long", "completeness"],
+            )
+            writer.writeheader()
+            writer.writerows(feasibility_rows)
+        for row in feasibility_rows:
+            missing_total = int(row["missing_total"])
+            missing_long = int(row["missing_long"])
+            if args.require_long_feasible and missing_long > 0:
+                raise SystemExit(
+                    f"Topology {row['topology_id']} missing long pairs under tolerance; "
+                    "relax tolerance or disable --require-long-feasible."
+                )
+            if args.require_target_feasible and missing_total > 0:
+                raise SystemExit(
+                    f"Topology {row['topology_id']} missing target pairs under tolerance; "
+                    "relax tolerance or disable --require-target-feasible."
+                )
 
     summary_rows = []
     for topo_id, edge_csv in zip(topo_ids, edge_csvs):

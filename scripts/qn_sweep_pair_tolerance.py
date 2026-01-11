@@ -6,8 +6,16 @@ import argparse
 import csv
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.qn_topologies import load_edge_distances_csv
+from scripts.qn_topology_feasibility import all_pairs_sp_km, compute_target_feasibility, filter_candidates_by_feasibility
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +32,16 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="0.15,0.2,0.25,0.3,0.35",
         help="Comma list of relative tolerances to sweep.",
+    )
+    p.add_argument(
+        "--require-target-feasible",
+        action="store_true",
+        help="Require all targets to have at least pairs-per-target pairs within tolerance.",
+    )
+    p.add_argument(
+        "--require-long-feasible",
+        action="store_true",
+        help="Require long target to have at least pairs-per-target pairs within tolerance.",
     )
     p.add_argument("--min-nodes", type=int, default=None)
     p.add_argument("--max-nodes", type=int, default=None)
@@ -103,24 +121,12 @@ def select_topologies(args: argparse.Namespace, out_dir: Path) -> Tuple[List[str
             list_cmd += ["--no-download"]
         run_cmd(list_cmd)
 
-        selected_csv = out_dir / "topologybench_selected.csv"
-        select_cmd = [
-            "python",
-            "scripts/qn_select_diverse_topologies.py",
-            "--list-csv",
-            str(list_csv),
-            "--k",
-            str(args.auto_select_topologies),
-            "--out-csv",
-            str(selected_csv),
-        ]
+        list_rows = load_csv(list_csv)
         if args.min_nodes is not None:
-            select_cmd += ["--min-nodes", str(args.min_nodes)]
+            list_rows = [r for r in list_rows if int(r["n_nodes"]) >= args.min_nodes]
         if args.max_nodes is not None:
-            select_cmd += ["--max-nodes", str(args.max_nodes)]
-        run_cmd(select_cmd)
-        selected_rows = load_csv(selected_csv)
-        topo_ids = [r["topology_id"] for r in selected_rows]
+            list_rows = [r for r in list_rows if int(r["n_nodes"]) <= args.max_nodes]
+        topo_ids = [r["topology_id"] for r in list_rows]
 
     dist_dir = Path("data/topologybench_distances")
     for topo_id in topo_ids:
@@ -163,15 +169,128 @@ def main() -> None:
     targets = parse_float_list(args.targets_km)
     tolerances = parse_float_list(args.tolerances)
 
+    candidate_meta = {}
+    for topo_id, edge_csv in zip(topo_ids, edge_csvs):
+        dist_map = load_edge_distances_csv(edge_csv)
+        pairs = all_pairs_sp_km(dist_map)
+        nodes = set()
+        for u, v in dist_map.keys():
+            nodes.add(u)
+            nodes.add(v)
+        n_nodes = len(nodes)
+        n_edges = len(dist_map)
+        avg_degree = (2 * n_edges / n_nodes) if n_nodes else 0.0
+        diameter_km = max((p[0] for p in pairs), default=0.0)
+        candidate_meta[topo_id] = {
+            "topology_id": topo_id,
+            "edge_csv": edge_csv,
+            "dist_map": dist_map,
+            "pairs": pairs,
+            "n_nodes": n_nodes,
+            "n_edges": n_edges,
+            "avg_degree": avg_degree,
+            "diameter_km": diameter_km,
+        }
+
     summary_rows = []
-    per_tol_out = {}
+    per_tol_out: Dict[float, Dict[str, object]] = {}
+    selected_topologies_by_tol: Dict[float, List[str]] = {}
+
     for tol in tolerances:
         tol_dir = root_out / f"tol_{str(tol).replace('.', 'p')}"
         tol_dir.mkdir(parents=True, exist_ok=True)
+        candidate_rows = []
+        for topo_id in topo_ids:
+            meta = candidate_meta[topo_id]
+            feas = compute_target_feasibility(
+                meta["dist_map"],
+                targets,
+                args.pairs_per_target,
+                args.pair_distance_abs_tol_km,
+                tol,
+                pairs=meta["pairs"],
+            )
+            candidate_rows.append(
+                {
+                    "topology_id": topo_id,
+                    "n_nodes": meta["n_nodes"],
+                    "n_edges": meta["n_edges"],
+                    "avg_degree": meta["avg_degree"],
+                    "diameter_km": meta["diameter_km"],
+                    "missing_total": feas["total_missing"],
+                    "missing_long": feas["missing_long"],
+                    "completeness": feas["completeness"],
+                    "counts_by_label": feas["counts_by_label"],
+                }
+            )
+
+        eligible = filter_candidates_by_feasibility(
+            candidate_rows,
+            args.require_long_feasible,
+            args.require_target_feasible,
+        )
+        selection_ok = len(eligible) >= args.auto_select_topologies
+        pool = eligible if selection_ok else candidate_rows
+        pool = sorted(
+            pool,
+            key=lambda r: (
+                int(r["missing_long"]),
+                int(r["missing_total"]),
+                -float(r["completeness"]),
+                float(r["diameter_km"]),
+                str(r["topology_id"]),
+            ),
+        )
+        if selection_ok and not args.require_target_feasible:
+            missing_vals = sorted({int(r["missing_total"]) for r in pool})
+            staged = []
+            for mv in missing_vals:
+                for row in pool:
+                    if int(row["missing_total"]) == mv:
+                        staged.append(row)
+                if len(staged) >= args.auto_select_topologies:
+                    break
+            pool = staged
+
+        selection_pool_csv = tol_dir / "selection_pool.csv"
+        with selection_pool_csv.open("w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"],
+            )
+            writer.writeheader()
+            for row in pool:
+                writer.writerow(
+                    {
+                        "topology_id": row["topology_id"],
+                        "n_nodes": row["n_nodes"],
+                        "n_edges": row["n_edges"],
+                        "avg_degree": row["avg_degree"],
+                        "diameter_km": f"{row['diameter_km']:.2f}",
+                    }
+                )
+        selected_csv = tol_dir / "selected_topologies.csv"
+        run_cmd(
+            [
+                "python",
+                "scripts/qn_select_diverse_topologies.py",
+                "--list-csv",
+                str(selection_pool_csv),
+                "--k",
+                str(args.auto_select_topologies),
+                "--out-csv",
+                str(selected_csv),
+            ]
+        )
+        selected_rows = load_csv(selected_csv)
+        selected_ids = [r["topology_id"] for r in selected_rows]
+        selected_topologies_by_tol[tol] = selected_ids
+
         total_missing = 0
         total_expected = 0
         missing_long = 0
-        for topo_id, edge_csv in zip(topo_ids, edge_csvs):
+        for topo_id in topo_ids:
+            meta = candidate_meta[topo_id]
             topo_dir = tol_dir / topo_id
             topo_dir.mkdir(parents=True, exist_ok=True)
             pairs_csv = topo_dir / "pairs_repr3.csv"
@@ -180,7 +299,7 @@ def main() -> None:
                     "python",
                     "scripts/qn_select_pairs_by_sp_distance.py",
                     "--edge-distance-csv",
-                    str(edge_csv),
+                    str(meta["edge_csv"]),
                     "--topology-id",
                     topo_id,
                     "--targets-km",
@@ -196,9 +315,11 @@ def main() -> None:
                 ]
             )
             stats = summarize_missing(pairs_csv, args.pairs_per_target, len(targets))
-            total_missing += stats["total_missing"]
-            total_expected += stats["total_expected"]
-            missing_long += stats["missing_by_label"].get("long", 0)
+            selected_flag = topo_id in selected_ids
+            if selected_flag:
+                total_missing += stats["total_missing"]
+                total_expected += stats["total_expected"]
+                missing_long += stats["missing_by_label"].get("long", 0)
             summary_rows.append(
                 {
                     "tolerance": tol,
@@ -209,6 +330,7 @@ def main() -> None:
                     "missing_count": stats["total_missing"],
                     "completeness": stats["completeness"],
                     "missing_long": stats["missing_by_label"].get("long", 0),
+                    "selected": selected_flag,
                 }
             )
             for label, count in stats["missing_by_label"].items():
@@ -224,6 +346,7 @@ def main() -> None:
                         if args.pairs_per_target
                         else 0.0,
                         "missing_long": count if label == "long" else 0,
+                        "selected": selected_flag,
                     }
                 )
         overall_completeness = (total_expected - total_missing) / total_expected if total_expected else 0.0
@@ -233,17 +356,20 @@ def main() -> None:
             "overall_completeness": overall_completeness,
             "missing_long": missing_long,
             "tol_dir": str(tol_dir),
+            "selection_ok": selection_ok,
+            "selected_topologies": selected_ids,
         }
         summary_rows.append(
             {
                 "tolerance": tol,
-                "topology_id": "ALL_TOPOLOGIES",
+                "topology_id": "SELECTED_SET",
                 "label": "all",
                 "total_expected": total_expected,
                 "found_count": total_expected - total_missing,
                 "missing_count": total_missing,
                 "completeness": overall_completeness,
                 "missing_long": missing_long,
+                "selected": True,
             }
         )
 
@@ -258,6 +384,7 @@ def main() -> None:
             "missing_count",
             "completeness",
             "missing_long",
+            "selected",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -267,19 +394,22 @@ def main() -> None:
     reason = ""
     for tol in tolerances:
         stats = per_tol_out[tol]
-        if stats["total_missing"] == 0:
+        if not stats["selection_ok"]:
+            continue
+        if stats["missing_long"] == 0 and stats["overall_completeness"] >= 0.95:
             chosen = tol
-            reason = "total_missing==0"
-            break
-        if stats["overall_completeness"] >= 0.95 and stats["missing_long"] == 0:
-            chosen = tol
-            reason = "completeness>=0.95 and missing_long==0"
+            reason = "missing_long==0 and completeness>=0.95"
             break
     if chosen is None:
-        # pick best completeness
-        best_tol = max(tolerances, key=lambda t: (per_tol_out[t]["overall_completeness"], -t))
-        chosen = best_tol
-        reason = "no tolerance met completeness criteria; chose best completeness"
+        best = sorted(
+            tolerances,
+            key=lambda t: (
+                per_tol_out[t]["missing_long"],
+                -per_tol_out[t]["overall_completeness"],
+            ),
+        )[0]
+        chosen = best
+        reason = "no tolerance met completeness criteria; chose best completeness/min missing_long"
         print(
             "WARNING: No tolerance met completeness criteria; "
             f"using tol={chosen} (completeness={per_tol_out[chosen]['overall_completeness']:.3f})."
@@ -293,11 +423,14 @@ def main() -> None:
                 "reason": reason,
                 "tolerances": tolerances,
                 "per_tolerance": per_tol_out,
-                "selected_topologies": topo_ids,
+                "selected_topologies_by_tolerance": selected_topologies_by_tol,
+                "chosen_topologies": per_tol_out.get(chosen, {}).get("selected_topologies", []),
                 "pair_distance_abs_tol_km": args.pair_distance_abs_tol_km,
                 "pair_distance_rel_tol_list": tolerances,
                 "pairs_per_target": args.pairs_per_target,
                 "targets_km": targets,
+                "require_target_feasible": args.require_target_feasible,
+                "require_long_feasible": args.require_long_feasible,
             },
             indent=2,
         )

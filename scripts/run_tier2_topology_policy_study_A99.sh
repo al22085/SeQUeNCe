@@ -17,16 +17,28 @@ python "${ROOT_DIR}/scripts/qn_sweep_pair_tolerance.py" \
   --auto-select-topologies 5 \
   --targets-km 404,511,1002 \
   --pairs-per-target 2 \
-  --tolerances 0.15,0.2,0.25,0.3,0.35
+  --tolerances 0.15,0.2,0.25,0.3,0.35 \
+  --require-long-feasible
 
 CHOSEN_TOL=$(
   python -c "import json; print(json.load(open('${ROOT_DIR}/${TOL_SWEEP_DIR}/chosen_tolerance.json'))['chosen_tolerance'])"
 )
+CHOSEN_TOPOS=$(
+  python - <<PY
+import json
+data=json.load(open("${ROOT_DIR}/${TOL_SWEEP_DIR}/chosen_tolerance.json"))
+print(",".join(data.get("chosen_topologies", [])))
+PY
+)
+if [ -z "${CHOSEN_TOPOS}" ]; then
+  echo "ERROR: No chosen_topologies found in ${TOL_SWEEP_DIR}/chosen_tolerance.json" >&2
+  exit 1
+fi
 TOL_TAG=$(python -c "print(str('${CHOSEN_TOL}').replace('.', 'p'))")
-OUT_DIR="${OUT_DIR:-${BASE_OUT_DIR}/tier2_A099_topology_policy_fullrange_k_5topos_tol${TOL_TAG}}"
+OUT_DIR="${OUT_DIR:-${BASE_OUT_DIR}/tier2_A099_topology_policy_fullrange_k_5topos_tol${TOL_TAG}_feasible}"
 
 python "${ROOT_DIR}/scripts/qn_run_topology_policy_upgrade_curves.py" \
-  --auto-select-topologies 5 \
+  --topology-id-list "${CHOSEN_TOPOS}" \
   --upgrade-k-mode full_range \
   --upgrade-policies global_rank,pair_demand,pair_path_only \
   --eta 0.9 --target 0.99 --kbits 1.0 --seeds 0,1,2,3 \
@@ -37,6 +49,7 @@ python "${ROOT_DIR}/scripts/qn_run_topology_policy_upgrade_curves.py" \
   --coherence-opt-s 0.05 --coherence-sc-s 0.1 \
   --loss-db-per-km 0.2 --segment-length-km 50 \
   --swap-schedule balanced --network-scope shortest_path \
+  --require-long-feasible \
   --workers 20 \
   --verify-parallel-mode pid_activity_strict \
   --preflight-task-seconds 3.0 --preflight-num-tasks 80 \
