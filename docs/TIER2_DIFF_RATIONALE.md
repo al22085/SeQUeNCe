@@ -15,7 +15,7 @@ Tier2 focuses on request-level availability at SLA target A=0.99 using represent
 - **Tier2 A=0.99 runner + tolerance sweep**: representative distances + full-range upgrade-k curves.
 - **Analysis layer**: linearity + path-coverage metrics + plotting helpers.
 - **Research-only audit docs**: tracked-only audits + chunked pytest recipe.
-- **Paper tooling removal (net-zero in final diff)**: temporary TeX/zip/bundle utilities were removed; final tracked state contains no paper-consumption tooling.
+- **TeX/zip tooling removal (net-zero in final diff)**: temporary TeX/zip/bundle utilities were removed; final tracked state contains no TeX/zip consumption tooling.
 
 ## D. Pipeline architecture
 Key components:
