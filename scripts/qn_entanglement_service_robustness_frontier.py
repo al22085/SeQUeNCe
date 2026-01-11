@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import sys
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -37,6 +38,7 @@ from sequence.qn.parallel import (
     validate_workers,
     sample_pid_cpu,
     collect_worker_pids,
+    list_child_pids,
 )
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 
@@ -498,13 +500,17 @@ def main():
                 monitor_records = []
                 monitor_left = args.utilization_monitor_samples
                 monitor_interval = max(0.5, args.utilization_monitor_seconds)
+                sample_interval = max(1.0, min(2.0, monitor_interval / 4.0))
                 min_cpu = 0.7 * effective_workers * 100.0
+                low_count = 0
+                low_required = 2
                 while pending:
                     done, pending = wait(pending, timeout=monitor_interval, return_when=FIRST_COMPLETED)
                     for fut in done:
                         results.append(fut.result())
                     if monitor_left > 0 and pending:
-                        sample = sample_pid_cpu(worker_pids, interval_s=0.5)
+                        current_pids = list_child_pids(os.getpid()) or worker_pids
+                        sample = sample_pid_cpu(current_pids, interval_s=sample_interval)
                         aggregate_cpu = sum(cpu for _, cpu in sample.values())
                         active_workers = sum(1 for state, cpu in sample.values() if cpu >= 50.0 and "R" in state)
                         monitor_records.append(
@@ -516,6 +522,10 @@ def main():
                             }
                         )
                         if aggregate_cpu < min_cpu:
+                            low_count += 1
+                        else:
+                            low_count = 0
+                        if low_count >= low_required:
                             for fut in pending:
                                 fut.cancel()
                             raise SystemExit(

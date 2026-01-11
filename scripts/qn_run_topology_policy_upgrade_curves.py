@@ -104,6 +104,13 @@ def parse_args():
     p.add_argument("--max-nodes", type=int, default=None, help="Max nodes when auto-selecting diverse topologies.")
     p.add_argument("--segment-length-km", type=float, default=50.0)
     p.add_argument("--loss-db-per-km", type=float, default=0.2)
+    p.add_argument("--swap-schedule", type=str, default="balanced", help="Swapping schedule (e.g., balanced).")
+    p.add_argument(
+        "--network-scope",
+        type=str,
+        default="shortest_path",
+        help="Network scope for robustness runs (e.g., shortest_path or full).",
+    )
     p.add_argument("--attempt-rate-opt-hz", type=float, default=5000)
     p.add_argument("--attempt-rate-sc-hz", type=float, default=10000)
     p.add_argument("--coherence-opt-s", type=float, default=0.05)
@@ -621,9 +628,9 @@ def main():
                         "--distance-dataset-id",
                         topo_id,
                         "--network-scope",
-                        "shortest_path",
+                        args.network_scope,
                         "--swap-schedule",
-                        "balanced",
+                        args.swap_schedule,
                         "--upgrade-policy",
                         policy,
                         "--topology-id",

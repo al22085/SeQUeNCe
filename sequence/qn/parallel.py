@@ -328,6 +328,33 @@ def _ps_snapshot(pids: Iterable[int]) -> str:
     return output.strip()
 
 
+def list_child_pids(parent_pid: int) -> List[int]:
+    """Return child PIDs for a parent by scanning /proc."""
+    pids: List[int] = []
+    proc = Path("/proc")
+    if not proc.exists():
+        return pids
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        stat_path = entry / "stat"
+        try:
+            raw = stat_path.read_text()
+        except OSError:
+            continue
+        parts = raw.split()
+        if len(parts) < 5:
+            continue
+        try:
+            ppid = int(parts[3])
+        except ValueError:
+            continue
+        if ppid == parent_pid:
+            pids.append(pid)
+    return sorted(pids)
+
+
 def verify_parallelism(
     workers: int,
     *,
