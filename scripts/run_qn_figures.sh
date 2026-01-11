@@ -7,7 +7,7 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 MODE=${MODE:-smoke} # smoke or prod
-BASE_OUT=${BASE_OUT:-out/qn_paper}
+BASE_OUT=${BASE_OUT:-out/qn_figures}
 RUN_NAME=${RUN_NAME:-$(date +%Y%m%d_%H%M%S)}
 
 if [[ "${MODE}" == "smoke" ]]; then
@@ -76,7 +76,7 @@ python scripts/qn_key_service_availability.py \
   --preset preset_key_service_otp_smoke \
   --out-dir "${OUT_DIR}/key_service"
 
-# Key-service sweep (paper figure)
+# Key-service sweep (figure)
 python scripts/qn_key_service_sweep.py \
   --preset preset_key_service_otp_smoke \
   --workers "${EFFECTIVE_WORKERS}" \
@@ -89,7 +89,7 @@ python scripts/plot_qn_key_service_sweep.py \
   --out-dir "${OUT_DIR}/key_service_sweep" \
   --title "Key-service sweep (${MODE})"
 
-# Migration frontier (paper figure)
+# Migration frontier (figure)
 python scripts/qn_key_service_migration_frontier.py \
   --preset preset_non_saturated_smoke \
   --workers "${EFFECTIVE_WORKERS}" \

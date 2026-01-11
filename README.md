@@ -15,7 +15,7 @@
 ![pyversions](https://img.shields.io/pypi/pyversions/sequence)
 [![Documentation](https://img.shields.io/readthedocs/sequence-rtd-tutorial)](https://sequence-rtd-tutorial.readthedocs.io/)
 [![Qutip](https://img.shields.io/badge/integration%20-Qutip-blue)](https://qutip.org/)
-[![Paper](https://img.shields.io/badge/10.1088%2F2058-9565%2Fac22f6?label=DOI)](https://iopscience.iop.org/article/10.1088/2058-9565/ac22f6)
+[![DOI](https://img.shields.io/badge/10.1088%2F2058-9565%2Fac22f6?label=DOI)](https://iopscience.iop.org/article/10.1088/2058-9565/ac22f6)
 [![PyPI Downloads](https://static.pepy.tech/badge/sequence/month)](https://pepy.tech/projects/sequence)
 <!-- [![Download-month](https://img.shields.io/pypi/dm/sequence)](https://pypistats.org/packages/sequence) -->
 
@@ -27,7 +27,7 @@
 
 ## SeQUeNCe: Simulator of QUantum Network Communication
 
-SeQUeNCe is an open source, discrete-event simulator for quantum networks. As described in our [paper](http://arxiv.org/abs/2009.12000), the simulator includes 5 modules on top of a simulation kernel:
+SeQUeNCe is an open source, discrete-event simulator for quantum networks. As described in our [publication](http://arxiv.org/abs/2009.12000), the simulator includes 5 modules on top of a simulation kernel:
 * Hardware
 * Entanglement Management
 * Resource Management
@@ -81,7 +81,7 @@ python gui.py
 Many examples of SeQUeNCe in action can be found in the [example](/example) folder. These include both quantum key distribution and entanglement distribution examples.
 
 ### Starlight Experiments
-Code for the experiments performed in our paper can be found in the file `starlight_experiments.py`. This script uses the `starlight.json` file (also within the example folder) to specify the network topology.
+Code for the experiments performed in our publication can be found in the file `starlight_experiments.py`. This script uses the `starlight.json` file (also within the example folder) to specify the network topology.
 
 ### Jupyter Notebook Examples
 The example folder contains several scripts that can be run with jupyter notebook for easy editing and visualization. These examples include:
@@ -122,7 +122,7 @@ pytest -q tests/network/test_qn_sweep_pair_tolerance_smoke.py \
 ## Contact
 If you have questions, please contact [Caitao Zhan](https://caitaozhan.github.io/) at [czhan@anl.gov](mailto:czhan@anl.gov).
 
-## Papers that Used and/or Extended SeQUeNCe
+## Publications that Used and/or Extended SeQUeNCe
 
 * X. Wu et al., ["Simulations of Photonic Quantum Networks for Performance Analysis and Experiment Design"](https://ieeexplore.ieee.org/document/8950718), IEEE/ACM Workshop on Photonics-Optics Technology Oriented Networking, Information and Computing Systems (PHOTONICS), 2019
 
@@ -149,4 +149,4 @@ If you have questions, please contact [Caitao Zhan](https://caitaozhan.github.io
 * C. Zhan et al., ["Design and Simulation of the Adaptive Continuous Entanglement Generation Protocol"](https://arxiv.org/abs/2502.01964), QCNC 2025. [GitHub Repository](https://github.com/caitaozhan/adaptive-continuous)
 
 
-Please do a Pull Request to add your paper here! 
+Please do a Pull Request to add your publication here! 

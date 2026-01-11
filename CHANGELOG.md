@@ -120,7 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.1] - 2025-4-25
 
 ### Added
-New Component Modules from this paper: https://arxiv.org/pdf/2411.11031. 
+New Component Modules from this publication: https://arxiv.org/pdf/2411.11031. 
 - `qlan.graph_gen`
 - `qlan.correction`
 - `qlan.measurement`
@@ -142,7 +142,7 @@ New classes for classical nodes (no quantum attributes)
 ## [0.7.0] - 2025-1-22
 
 ### Added
-New Component Modules from this paper: https://arxiv.org/pdf/2411.11377. 
+New Component Modules from this publication: https://arxiv.org/pdf/2411.11377. 
 - `Transducer`
 - `Transmon`
 - `FockDetector`
@@ -427,4 +427,3 @@ New Component Modules from this paper: https://arxiv.org/pdf/2411.11377.
 ### Removed
 - push/pop functions for entities and non-stack protocols
 - some unnecessary entity attributes
-

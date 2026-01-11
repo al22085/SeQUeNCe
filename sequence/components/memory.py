@@ -135,7 +135,7 @@ class MemoryArray(Entity):
         return self.memories[index]
 
 
-# define helper functions for analytical BDS decoherence implementation, reference see recurrence protocol paper
+# define helper functions for analytical BDS decoherence implementation, reference see recurrence protocol publication
 def _p_id(x_rate, y_rate, z_rate, t):
     val = (1 + exp(-2*(x_rate+y_rate)*t) + exp(-2*(x_rate+z_rate)*t) + exp(-2*(z_rate+y_rate)*t)) / 4
     return val
@@ -366,7 +366,7 @@ class Memory(Entity):
         """Method to decohere stored BDS in quantum memory according to the single-qubit Pauli channels.
 
         During entanglement distribution (before application phase),
-        BDS decoherence can be treated analytically (see entanglement purification paper for explicit formulae).
+        BDS decoherence can be treated analytically (see entanglement purification publication for explicit formulae).
 
         Side Effects:
             Will modify BDS diagonal elements and last_update_time.
