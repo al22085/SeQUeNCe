@@ -48,6 +48,8 @@ def main() -> None:
 
     # Missing pair visibility.
     missing_by_topo: Dict[str, Dict[str, int]] = {}
+    tol_summary_path = root / "tolerance_missing_summary.csv"
+    tol_summary_rows = load_csv(tol_summary_path) if tol_summary_path.exists() else []
     for topo_dir in sorted(root.iterdir()):
         if not topo_dir.is_dir():
             continue
@@ -119,6 +121,17 @@ def main() -> None:
         for topo_id, counts in sorted(missing_by_topo.items()):
             details = ", ".join([f"{k}:{v}" for k, v in sorted(counts.items())])
             lines.append(f"- {topo_id}: missing_pairs={details}")
+    if tol_summary_rows:
+        lines.append("")
+        lines.append("## Missing pairs summary (tolerance sweep)")
+        for r in tol_summary_rows:
+            if r.get("topology_id") != "ALL_TOPOLOGIES" or r.get("label") != "all":
+                continue
+            lines.append(
+                f"- tol={r.get('tolerance')} "
+                f"missing_count={r.get('missing_count')} "
+                f"completeness={r.get('completeness')}"
+            )
 
     out_path.write_text("\n".join(lines) + "\n")
     print(f"Wrote {out_path}")

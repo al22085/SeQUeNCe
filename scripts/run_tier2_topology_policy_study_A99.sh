@@ -2,19 +2,35 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${OUT_DIR:-out/tier2_A099_topology_policy_fullrange_k_5topos}"
+BASE_OUT_DIR="${OUT_DIR:-out}"
+TOL_SWEEP_DIR="${BASE_OUT_DIR}/tier2_A099_pair_tolerance_sweep"
+
+mkdir -p "${ROOT_DIR}/${BASE_OUT_DIR}"
 
 python "${ROOT_DIR}/scripts/qn_stop_running_jobs.py"
 
 # Ensure pinned TopologyBench zip exists under ./data/topologybench/
 python "${ROOT_DIR}/scripts/qn_topologybench_fetch.py"
 
+python "${ROOT_DIR}/scripts/qn_sweep_pair_tolerance.py" \
+  --root-out-dir "${ROOT_DIR}/${TOL_SWEEP_DIR}" \
+  --auto-select-topologies 5 \
+  --targets-km 404,511,1002 \
+  --pairs-per-target 2 \
+  --tolerances 0.15,0.2,0.25,0.3,0.35
+
+CHOSEN_TOL=$(
+  python -c "import json; print(json.load(open('${ROOT_DIR}/${TOL_SWEEP_DIR}/chosen_tolerance.json'))['chosen_tolerance'])"
+)
+TOL_TAG=$(python -c "print(str('${CHOSEN_TOL}').replace('.', 'p'))")
+OUT_DIR="${OUT_DIR:-${BASE_OUT_DIR}/tier2_A099_topology_policy_fullrange_k_5topos_tol${TOL_TAG}}"
+
 python "${ROOT_DIR}/scripts/qn_run_topology_policy_upgrade_curves.py" \
   --auto-select-topologies 5 \
   --upgrade-k-mode full_range \
   --upgrade-policies global_rank,pair_demand,pair_path_only \
   --eta 0.9 --target 0.99 --kbits 1.0 --seeds 0,1,2,3 \
-  --targets-km 404,511,1002 --pairs-per-target 2 --pair-distance-rel-tol 0.15 \
+  --targets-km 404,511,1002 --pairs-per-target 2 --pair-distance-rel-tol "${CHOSEN_TOL}" \
   --binary-search --load-min 0.001 --load-max 5.0 --load-tol 0.05 \
   --horizon-s 0.3 --tau-s 0.1 \
   --attempt-rate-opt-hz 5000 --attempt-rate-sc-hz 10000 \
@@ -26,6 +42,9 @@ python "${ROOT_DIR}/scripts/qn_run_topology_policy_upgrade_curves.py" \
   --preflight-task-seconds 3.0 --preflight-num-tasks 80 \
   --utilization-monitor-seconds 60 --utilization-monitor-samples 5 \
   --out-dir "${ROOT_DIR}/${OUT_DIR}"
+
+cp "${ROOT_DIR}/${TOL_SWEEP_DIR}/tolerance_missing_summary.csv" "${ROOT_DIR}/${OUT_DIR}/tolerance_missing_summary.csv"
+cp "${ROOT_DIR}/${TOL_SWEEP_DIR}/chosen_tolerance.json" "${ROOT_DIR}/${OUT_DIR}/chosen_tolerance.json"
 
 python "${ROOT_DIR}/scripts/qn_export_curve_linearity_report.py" \
   --root-dir "${ROOT_DIR}/${OUT_DIR}" \
