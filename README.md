@@ -115,7 +115,8 @@ pytest -q tests/network/test_qn_topologybench_fetch.py \
   tests/network/test_qn_topologybench_generic_import_list_select.py \
   tests/network/test_qn_import_topologybench.py
 pytest -q tests/network/test_qn_sweep_pair_tolerance_smoke.py \
-  tests/network/test_qn_topology_feasibility_selection.py
+  tests/network/test_qn_topology_feasibility_selection.py \
+  tests/network/test_qn_generate_tier2_key_findings_smoke.py
 ```
 
 ## Contact
