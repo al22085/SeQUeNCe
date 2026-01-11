@@ -12,21 +12,17 @@ git ls-files | rg -n "qn_export_tier2_paper_artifacts|qn_bundle_tier2_paper_arti
 
 git ls-files | rg -n "paper_artifacts_bundle|latex_include|tier2_paper_artifacts\.tex|ZipSlip|SHA256SUMS\.txt" || true
 
-# Legacy naming inventory (tracked only)
+# Naming inventory (tracked only; neutral naming expected)
 
-P1=pa
-P2=per
-PATTERN="${P1}${P2}"
-git ls-files | rg -n "$PATTERN" || true
+git ls-files | rg -n "\\bpaper\\b" || true
+
+git ls-files | rg -n "paper" || true
 ```
 
 ## B) Content audit excluding local artifacts
 This searches tracked content while explicitly excluding local artifacts:
 ```
-P1=pa
-P2=per
-PATTERN="${P1}${P2}"
-rg -n "$PATTERN" -S --glob '!out/**' --glob '!.venv/**' . || true
+rg -n "\\bpaper\\b" -S --glob '!out/**' --glob '!.venv/**' . || true
 ```
 
 ## C) Outdir audits (optional, local artifacts only)
