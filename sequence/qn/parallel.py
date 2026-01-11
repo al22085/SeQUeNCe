@@ -7,11 +7,10 @@ import sys
 import time
 import math
 import subprocess
-import getpass
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 
 def _spin(seconds: float) -> int:
@@ -20,6 +19,11 @@ def _spin(seconds: float) -> int:
     x = 0.0
     while time.perf_counter() < end:
         x = (x + 1.0) * 1.0000001
+    return os.getpid()
+
+
+def _worker_pid() -> int:
+    """Return worker pid."""
     return os.getpid()
 
 
@@ -213,14 +217,25 @@ def detect_cpu_limit() -> Dict[str, object]:
         "cpu_stat_path": str(cpu_stat_path) if cpu_stat_path else "",
     }
 
+def validate_workers(requested: int, *, min_workers: int = 2, max_workers: int = 20) -> int:
+    if requested < min_workers or requested > max_workers:
+        raise RuntimeError(f"workers must be between {min_workers} and {max_workers}")
+    return requested
 
-def normalize_workers(requested: int, *, min_workers: int = 2, max_workers: int = 20) -> tuple[int, float | None, str]:
+
+def normalize_workers(
+    requested: int,
+    *,
+    min_workers: int = 2,
+    max_workers: int = 20,
+    enforce_limit: bool = True,
+) -> tuple[int, float | None, str]:
     if requested < min_workers or requested > max_workers:
         raise RuntimeError(f"workers must be between {min_workers} and {max_workers}")
     limit_info = detect_cpu_limit()
     limit = limit_info["effective_cpu_limit"]
     reason = limit_info["limit_reason"]
-    if not limit:
+    if not limit or not enforce_limit:
         return requested, None, reason
     effective = int(max(1, math.floor(float(limit))))
     if effective < min_workers:
@@ -244,6 +259,75 @@ def get_mp_context(start_method: str | None = None) -> mp.context.BaseContext:
     return mp.get_context()
 
 
+class ParallelVerificationError(RuntimeError):
+    def __init__(self, message: str, report: Dict[str, object]):
+        super().__init__(message)
+        self.report = report
+
+
+def _read_proc_pid_stat(pid: int) -> tuple[str, int] | None:
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        data = stat_path.read_text()
+    except OSError:
+        return None
+    end = data.rfind(")")
+    if end == -1:
+        return None
+    after = data[end + 2 :].split()
+    if len(after) < 13:
+        return None
+    state = after[0]
+    try:
+        utime = int(after[11])
+        stime = int(after[12])
+    except ValueError:
+        return None
+    return state, utime + stime
+
+
+def sample_pid_cpu(pids: List[int], interval_s: float = 0.5) -> Dict[int, tuple[str, float]]:
+    """Return {pid: (state, cpu_percent)} sampled over interval_s using /proc."""
+    hz = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+    before: Dict[int, tuple[str, int]] = {}
+    for pid in pids:
+        stat = _read_proc_pid_stat(pid)
+        if stat:
+            before[pid] = stat
+    time.sleep(interval_s)
+    out: Dict[int, tuple[str, float]] = {}
+    for pid in pids:
+        stat = _read_proc_pid_stat(pid)
+        if not stat or pid not in before:
+            continue
+        state, ticks = stat
+        _, before_ticks = before[pid]
+        delta = max(0, ticks - before_ticks)
+        cpu_percent = (delta / hz) / interval_s * 100.0 if interval_s > 0 else 0.0
+        out[pid] = (state, cpu_percent)
+    return out
+
+
+def collect_worker_pids(ex: ProcessPoolExecutor, workers: int) -> List[int]:
+    futures = [ex.submit(_worker_pid) for _ in range(workers)]
+    pids = [f.result() for f in futures]
+    return sorted(set(pids))
+
+
+def _ps_snapshot(pids: Iterable[int]) -> str:
+    pids_list = [str(pid) for pid in sorted(set(pids)) if pid > 0]
+    if not pids_list:
+        return ""
+    try:
+        output = subprocess.check_output(
+            ["ps", "-o", "pid,ppid,stat,%cpu,cmd", "-p", ",".join(pids_list)],
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return output.strip()
+
+
 def verify_parallelism(
     workers: int,
     *,
@@ -252,20 +336,23 @@ def verify_parallelism(
     num_tasks: int | None = None,
     overhead_factor: float = 3.0,
     mp_context: mp.context.BaseContext | None = None,
+    strict_min_cpu_frac: float = 0.95,
+    strict_min_active: int | None = None,
 ) -> Dict[str, object]:
     """Verify ProcessPool parallelism using CPU-bound tasks.
 
     pid_only: require distinct worker PIDs, no speedup threshold.
     speedup: additionally enforce wall-time speedup vs serial baseline.
     pid_activity: require distinct PIDs and high CPU activity across workers.
+    pid_activity_strict: require near-full CPU usage for requested workers.
     """
     if workers < 2:
         raise RuntimeError("workers must be >= 2 for parallel verification")
-    if mode not in ("pid_only", "speedup", "pid_activity"):
+    if mode not in ("pid_only", "speedup", "pid_activity", "pid_activity_strict"):
         raise RuntimeError(f"Unknown verify mode: {mode}")
 
     if num_tasks is None:
-        num_tasks = workers * 4 if mode in ("speedup", "pid_activity") else workers * 2
+        num_tasks = workers * 4 if mode in ("speedup", "pid_activity", "pid_activity_strict") else workers * 2
 
     ctx = mp_context or get_mp_context()
     start_method = ctx.get_start_method()
@@ -283,56 +370,29 @@ def verify_parallelism(
             start = time.perf_counter()
             futures = [ex.submit(_spin, task_seconds) for _ in range(num_tasks)]
             ps_snapshot = ""
-            worker_cpu = {}
+            worker_cpu: Dict[int, tuple[str, float]] = {}
             active_workers = 0
             aggregate_cpu = 0.0
-            if mode == "pid_activity":
-                pid_list = ",".join(str(pid) for pid in unique_pids)
-                best_snapshot = ""
+            if mode in ("pid_activity", "pid_activity_strict"):
                 best_active = 0
                 best_agg = 0.0
+                best_worker_cpu: Dict[int, tuple[str, float]] = {}
                 for _ in range(3):
-                    time.sleep(max(0.5, task_seconds / 4.0))
-                    ps_cmd = ["ps", "-p", pid_list, "-o", "pid,ppid,stat,%cpu,cmd"]
-                    try:
-                        ps_snapshot = subprocess.check_output(ps_cmd, text=True)
-                    except subprocess.CalledProcessError:
-                        ps_cmd = [
-                            "ps",
-                            "-u",
-                            getpass.getuser(),
-                            "-o",
-                            "pid,ppid,stat,%cpu,cmd",
-                            "--sort=-%cpu",
-                        ]
-                        ps_snapshot = subprocess.check_output(ps_cmd, text=True)
-                    worker_cpu = {}
-                    active_workers = 0
-                    aggregate_cpu = 0.0
-                    for line in ps_snapshot.splitlines()[1:]:
-                        parts = line.split(None, 4)
-                        if len(parts) < 5:
-                            continue
-                        pid_s, _, stat, cpu_s, _ = parts
-                        try:
-                            pid = int(pid_s)
-                            cpu = float(cpu_s)
-                        except ValueError:
-                            continue
-                        if pid in unique_pids:
-                            worker_cpu[pid] = (stat, cpu)
-                            aggregate_cpu += cpu
-                            if cpu >= 50.0 and "R" in stat:
-                                active_workers += 1
-                    if active_workers > best_active or aggregate_cpu > best_agg:
-                        best_active = active_workers
-                        best_agg = aggregate_cpu
-                        best_snapshot = ps_snapshot
-                    if active_workers >= max(1, math.floor(0.8 * workers)):
-                        break
+                    sample = sample_pid_cpu(unique_pids, interval_s=max(0.5, task_seconds / 4.0))
+                    active = 0
+                    agg = 0.0
+                    for _, (state, cpu) in sample.items():
+                        agg += cpu
+                        if cpu >= 50.0 and "R" in state:
+                            active += 1
+                    if active > best_active or agg > best_agg:
+                        best_active = active
+                        best_agg = agg
+                        best_worker_cpu = sample
+                worker_cpu = best_worker_cpu
                 active_workers = best_active
                 aggregate_cpu = best_agg
-                ps_snapshot = best_snapshot
+                ps_snapshot = _ps_snapshot(unique_pids)
             pids = [f.result() for f in futures]
             elapsed = time.perf_counter() - start
     except PermissionError as exc:
@@ -346,7 +406,7 @@ def verify_parallelism(
             "or run outside the sandbox to enable multiprocessing."
         ) from exc
 
-    if mode != "pid_activity":
+    if mode not in ("pid_activity", "pid_activity_strict"):
         unique_pids = sorted(set(pids))
     if len(unique_pids) < min(workers, num_tasks):
         raise RuntimeError(
@@ -360,32 +420,42 @@ def verify_parallelism(
 
     serial_time = task_seconds * num_tasks
     expected_parallel = (serial_time / workers) * overhead_factor
-    if mode == "speedup" and elapsed > expected_parallel:
-        raise RuntimeError(
-            f"Parallel verification too slow: elapsed {elapsed:.3f}s exceeds "
-            f"expected_parallel {expected_parallel:.3f}s (serial_time={serial_time:.3f}s, "
-            f"overhead_factor={overhead_factor:.2f})"
-        )
     expected_cpu = 100.0 * min(
         workers,
         limit_info["effective_cpu_limit"] if limit_info["effective_cpu_limit"] else workers,
     )
     observed_cpu_limit = aggregate_cpu / 100.0 if aggregate_cpu else None
-    if mode == "pid_activity":
-        if active_workers < max(1, math.floor(0.8 * workers)):
-            raise RuntimeError(
+    failure_message = None
+    if mode == "speedup" and elapsed > expected_parallel:
+        failure_message = (
+            f"Parallel verification too slow: elapsed {elapsed:.3f}s exceeds "
+            f"expected_parallel {expected_parallel:.3f}s (serial_time={serial_time:.3f}s, "
+            f"overhead_factor={overhead_factor:.2f})"
+        )
+    if mode in ("pid_activity", "pid_activity_strict") and not failure_message:
+        if mode == "pid_activity_strict":
+            min_active = strict_min_active if strict_min_active is not None else max(1, workers - 1)
+        else:
+            min_active = max(1, math.floor(0.8 * workers))
+        if active_workers < min_active:
+            failure_message = (
                 f"Parallel verification: too few active workers ({active_workers}/{workers}). "
-                "Likely idle workers or chunking too coarse. "
-                f"worker_pids={unique_pids} aggregate_cpu={aggregate_cpu:.1f}%\n"
-                f"ps_snapshot:\n{ps_snapshot}"
+                "Likely idle workers or chunking too coarse."
             )
-        if aggregate_cpu < expected_cpu * 0.8 and not throttled_detected:
-            raise RuntimeError(
-                f"Parallel verification: aggregate CPU {aggregate_cpu:.1f}% below expected {expected_cpu:.1f}% "
-                "without throttling; check chunking or scheduler."
+        min_cpu = expected_cpu * 0.8
+        if mode == "pid_activity_strict":
+            min_cpu = strict_min_cpu_frac * workers * 100.0
+            limit = limit_info.get("effective_cpu_limit")
+            if limit and limit < workers:
+                failure_message = (
+                    f"Parallel verification: cpu limit {limit:.2f} below requested {workers}."
+                )
+        if not failure_message and aggregate_cpu < min_cpu and not throttled_detected:
+            failure_message = (
+                f"Parallel verification: aggregate CPU {aggregate_cpu:.1f}% below expected {min_cpu:.1f}%."
             )
 
-    return {
+    report = {
         "mode": "processpool",
         "verify_mode": mode,
         "effective_workers": workers,
@@ -409,3 +479,6 @@ def verify_parallelism(
         "nr_throttled_delta": nr_throttled,
         "cpu_limit_info": limit_info,
     }
+    if failure_message:
+        raise ParallelVerificationError(failure_message, report)
+    return report

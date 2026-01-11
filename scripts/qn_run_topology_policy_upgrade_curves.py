@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import subprocess
 from pathlib import Path
 from typing import Dict, List
@@ -17,7 +16,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.qn_topologies import load_edge_distances_csv, build_topology_from_dist_map
-from sequence.qn.parallel import verify_parallelism, get_mp_context, normalize_workers
+from sequence.qn.parallel import (
+    ParallelVerificationError,
+    verify_parallelism,
+    get_mp_context,
+    validate_workers,
+)
 
 
 def parse_float_list(raw: str) -> List[float]:
@@ -113,15 +117,28 @@ def parse_args():
     p.add_argument("--no-binary-search", dest="binary_search", action="store_false", help="Disable binary search.")
     p.add_argument("--verify-parallel", action="store_true", help="Verify ProcessPool parallelism before running.")
     p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
+    p.add_argument("--preflight", dest="verify_parallel", action="store_true", help="Alias for --verify-parallel.")
+    p.add_argument("--no-preflight", dest="verify_parallel", action="store_false", help="Alias for --no-verify-parallel.")
+    p.add_argument("--preflight-strict", action="store_true", help="Require near-full CPU usage in preflight.")
+    p.add_argument("--no-preflight-strict", dest="preflight_strict", action="store_false", help="Disable strict CPU threshold.")
     p.add_argument(
         "--verify-parallel-mode",
-        choices=["pid_only", "pid_activity", "speedup"],
-        default="pid_activity",
-        help="Parallel preflight mode (default: pid_activity).",
+        choices=["pid_only", "pid_activity", "pid_activity_strict", "speedup"],
+        default="pid_activity_strict",
+        help="Parallel preflight mode (default: pid_activity_strict).",
     )
-    p.add_argument("--verify-parallel-task-seconds", type=float, default=3.0, help="CPU spin seconds per preflight task.")
-    p.add_argument("--verify-parallel-num-tasks", type=int, default=0, help="Override number of preflight tasks (0=auto).")
+    p.add_argument("--preflight-workers", type=int, default=0, help="Override preflight workers (0=use --workers).")
+    p.add_argument("--preflight-task-seconds", type=float, default=3.0, help="CPU spin seconds per preflight task.")
+    p.add_argument("--preflight-num-tasks", type=int, default=0, help="Override number of preflight tasks (0=auto).")
     p.add_argument("--verify-parallel-overhead", type=float, default=3.0, help="Overhead factor for speedup mode.")
+    p.add_argument("--utilization-monitor-seconds", type=float, default=60.0, help="Seconds between utilization samples during run.")
+    p.add_argument("--utilization-monitor-samples", type=int, default=5, help="Number of utilization samples during run.")
+    p.add_argument(
+        "--task-granularity",
+        choices=["topo_policy", "topo_policy_pair_seed", "topo_policy_pair_seed_k"],
+        default="topo_policy_pair_seed",
+        help="Task granularity passed to robustness runner.",
+    )
     p.add_argument(
         "--mp-start-method",
         type=str,
@@ -131,7 +148,7 @@ def parse_args():
     p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--out-dir", type=Path, default=Path("out/topology_policy_upgrade_curves"))
-    p.set_defaults(binary_search=True, verify_parallel=True)
+    p.set_defaults(binary_search=True, verify_parallel=True, preflight_strict=True)
     return p.parse_args()
 
 
@@ -211,18 +228,22 @@ def main():
     args = parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+        effective_workers = validate_workers(args.workers, min_workers=2, max_workers=20)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    if cpu_limit is not None and effective_workers < args.workers:
-        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
+    parallel_report = None
     if args.verify_parallel:
+        preflight_workers = args.preflight_workers or effective_workers
+        strict_mode = args.preflight_strict
+        verify_mode = args.verify_parallel_mode
+        if strict_mode:
+            verify_mode = "pid_activity_strict"
         try:
             info = verify_parallelism(
-                effective_workers,
-                mode=args.verify_parallel_mode,
-                task_seconds=args.verify_parallel_task_seconds,
-                num_tasks=(args.verify_parallel_num_tasks or None),
+                preflight_workers,
+                mode=verify_mode,
+                task_seconds=args.preflight_task_seconds,
+                num_tasks=(args.preflight_num_tasks or None),
                 overhead_factor=args.verify_parallel_overhead,
                 mp_context=get_mp_context(args.mp_start_method or None),
             )
@@ -231,13 +252,11 @@ def main():
                 f"mode={info['verify_mode']} effective_workers={info['effective_workers']} "
                 f"pids={info['worker_pids']} start_method={info['start_method']}"
             )
-            if info.get("verify_mode") == "pid_activity":
+            if info.get("verify_mode") in ("pid_activity", "pid_activity_strict"):
                 print(
                     f"Parallel activity: active_workers={info.get('active_workers')} "
                     f"aggregate_cpu={info.get('aggregate_cpu'):.1f}%"
                 )
-                if info.get("ps_snapshot"):
-                    print("Parallel activity ps snapshot:\n" + info["ps_snapshot"])
             limit_info = info.get("cpu_limit_info", {})
             print(
                 "CPU limit summary: "
@@ -253,26 +272,30 @@ def main():
                 f"throttled_usec_delta={info.get('throttled_usec_delta')} "
                 f"nr_throttled_delta={info.get('nr_throttled_delta')}"
             )
-            if info.get("observed_cpu_limit") and info["observed_cpu_limit"] < effective_workers:
-                tuned = max(2, int(math.floor(info["observed_cpu_limit"])))
-                print(
-                    f"WARNING: observed_cpu_limit={info['observed_cpu_limit']:.2f}; "
-                    f"auto-tuning effective_workers {effective_workers} -> {tuned}"
-                )
-                effective_workers = tuned
+        except ParallelVerificationError as exc:
+            parallel_report = {
+                "requested_workers": args.workers,
+                "effective_workers": effective_workers,
+                "verify_mode": verify_mode,
+                "verify_info": exc.report,
+                "error": str(exc),
+            }
+            report_path = args.out_dir / "parallel_report.json"
+            report_path.write_text(json.dumps(parallel_report, indent=2))
+            raise SystemExit(str(exc)) from exc
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
             else:
                 raise SystemExit(f"Parallel verification failed: {exc}") from exc
-        report = {
+        parallel_report = {
             "requested_workers": args.workers,
             "effective_workers": effective_workers,
-            "verify_mode": args.verify_parallel_mode,
+            "verify_mode": verify_mode,
             "verify_info": info,
         }
         report_path = args.out_dir / "parallel_report.json"
-        report_path.write_text(json.dumps(report, indent=2))
+        report_path.write_text(json.dumps(parallel_report, indent=2))
 
     edge_csvs = [Path(p) for p in parse_list(args.edge_csv_list)] if args.edge_csv_list else []
     topo_ids = parse_list(args.topology_id_list) if args.topology_id_list else []
@@ -587,11 +610,19 @@ def main():
                     if args.binary_search:
                         cmd.append("--binary-search")
                     cmd.append("--no-verify-parallel")
+                    cmd += ["--task-granularity", args.task_granularity]
+                    cmd += ["--utilization-monitor-seconds", str(args.utilization_monitor_seconds)]
+                    cmd += ["--utilization-monitor-samples", str(args.utilization_monitor_samples)]
                     if args.mp_start_method:
                         cmd += ["--mp-start-method", args.mp_start_method]
                     if args.allow_thread_fallback:
                         cmd.append("--allow-thread-fallback")
                     run_cmd(cmd)
+                    runtime_report = run_out / "parallel_runtime_report.json"
+                    if parallel_report is not None and runtime_report.exists():
+                        runtime_data = json.loads(runtime_report.read_text())
+                        parallel_report.setdefault("runtime_reports", {})[f"{topo_id}/{policy}"] = runtime_data
+                        (args.out_dir / "parallel_report.json").write_text(json.dumps(parallel_report, indent=2))
 
                     curve_csv = run_out / "upgrade_k_curve_numbers.csv"
                     run_cmd(

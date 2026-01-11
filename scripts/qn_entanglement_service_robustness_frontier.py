@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -30,7 +30,14 @@ from scripts.qn_topologies import (
     edge_usage_counts,
 )
 from sequence.qn.entanglement_service import EdgeParams, SwapParams, simulate_entanglement_service
-from sequence.qn.parallel import verify_parallelism, get_mp_context, normalize_workers
+from sequence.qn.parallel import (
+    ParallelVerificationError,
+    verify_parallelism,
+    get_mp_context,
+    validate_workers,
+    sample_pid_cpu,
+    collect_worker_pids,
+)
 from sequence.qn.strategy_params import StrategyKnobs, edge_params_for_strategy, swap_params_for_strategy
 
 
@@ -67,6 +74,7 @@ class RobustEvalTask:
     otp_session_duration_s: float
     otp_directions: int
     swap_schedule: str
+    seed: int | None = None
 
 
 def _eval_robustness_task(task: RobustEvalTask):
@@ -128,7 +136,7 @@ def _eval_robustness_task(task: RobustEvalTask):
     evaluated = set()
 
     def record(load, mean_av, std_av):
-        load_rows.append((load, mean_av, std_av, len(task.seeds)))
+        load_rows.append((load, mean_av, std_av, len(task.seeds), task.seed if task.seed is not None else ""))
         evaluated.add(load)
 
     if task.binary_search:
@@ -158,6 +166,7 @@ def _eval_robustness_task(task: RobustEvalTask):
                         "kbits": kb,
                         "target": tgt,
                         "frontier_load": frontier,
+                        "seed": task.seed if task.seed is not None else "",
                     }
                 )
                 continue
@@ -174,6 +183,7 @@ def _eval_robustness_task(task: RobustEvalTask):
                         "kbits": kb,
                         "target": tgt,
                         "frontier_load": frontier,
+                        "seed": task.seed if task.seed is not None else "",
                     }
                 )
                 continue
@@ -201,6 +211,7 @@ def _eval_robustness_task(task: RobustEvalTask):
                     "kbits": kb,
                     "target": tgt,
                     "frontier_load": frontier,
+                    "seed": task.seed if task.seed is not None else "",
                 }
             )
     else:
@@ -209,7 +220,7 @@ def _eval_robustness_task(task: RobustEvalTask):
             record(load, m, s)
         for tgt in task.targets:
             frontier = 0.0
-            for load, mean_av, _, _ in load_rows:
+            for load, mean_av, _, _, _ in load_rows:
                 if mean_av >= tgt and load > frontier:
                     frontier = load
             frontier_rows.append(
@@ -223,6 +234,7 @@ def _eval_robustness_task(task: RobustEvalTask):
                     "kbits": kb,
                     "target": tgt,
                     "frontier_load": frontier,
+                    "seed": task.seed if task.seed is not None else "",
                 }
             )
     return pair, eta_val, strat, uk, kb, load_rows, frontier_rows
@@ -279,7 +291,7 @@ def parse_args():
     p.add_argument("--no-verify-parallel", dest="verify_parallel", action="store_false", help="Skip parallelism verification.")
     p.add_argument(
         "--verify-parallel-mode",
-        choices=["pid_only", "pid_activity", "speedup"],
+        choices=["pid_only", "pid_activity", "pid_activity_strict", "speedup"],
         default="pid_only",
         help="Parallel preflight mode (default: pid_only).",
     )
@@ -294,6 +306,14 @@ def parse_args():
     )
     p.add_argument("--allow-thread-fallback", action="store_true", help="Allow ThreadPool fallback if ProcessPool fails.")
     p.add_argument("--swap-schedule", choices=["sequential", "balanced"], default="sequential")
+    p.add_argument(
+        "--task-granularity",
+        choices=["topo_policy", "topo_policy_pair_seed", "topo_policy_pair_seed_k"],
+        default="topo_policy_pair_seed",
+        help="Task granularity for ProcessPool tasks.",
+    )
+    p.add_argument("--utilization-monitor-seconds", type=float, default=60.0, help="Seconds between utilization samples.")
+    p.add_argument("--utilization-monitor-samples", type=int, default=5, help="Number of utilization samples.")
     p.add_argument("--topology-id", type=str, default="nsfnet")
     p.add_argument("--out-dir", type=Path, default=Path("out/qn_entanglement_service_robustness"))
     p.set_defaults(verify_parallel=True)
@@ -303,11 +323,9 @@ def parse_args():
 def main():
     args = parse_args()
     try:
-        effective_workers, cpu_limit, cpu_reason = normalize_workers(args.workers, min_workers=2, max_workers=20)
+        effective_workers = validate_workers(args.workers, min_workers=2, max_workers=20)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    if cpu_limit is not None and effective_workers < args.workers:
-        print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
     if args.verify_parallel:
         try:
             info = verify_parallelism(
@@ -323,13 +341,13 @@ def main():
                 f"mode={info['verify_mode']} effective_workers={info['effective_workers']} "
                 f"pids={info['worker_pids']} start_method={info['start_method']}"
             )
-            if info.get("verify_mode") == "pid_activity":
+            if info.get("verify_mode") in ("pid_activity", "pid_activity_strict"):
                 print(
                     f"Parallel activity: active_workers={info.get('active_workers')} "
                     f"aggregate_cpu={info.get('aggregate_cpu'):.1f}%"
                 )
-                if info.get("ps_snapshot"):
-                    print("Parallel activity ps snapshot:\n" + info["ps_snapshot"])
+        except ParallelVerificationError as exc:
+            raise SystemExit(str(exc)) from exc
         except Exception as exc:
             if args.allow_thread_fallback:
                 print(f"Parallel verification failed ({exc}); proceeding with thread fallback allowed")
@@ -411,6 +429,7 @@ def main():
         "availability_mean",
         "availability_std",
         "runs",
+        "seed",
     ]
 
     tasks: List[RobustEvalTask] = []
@@ -425,33 +444,39 @@ def main():
             for uk in upgrade_ks:
                 for strat in strategies:
                     for kb in kbits_list:
-                        tasks.append(
-                            RobustEvalTask(
-                                topology_id=args.topology_id,
-                                pair=pair,
-                                path_edges=path_edges,
-                                eta_val=eta_val,
-                                upgrade_k=uk,
-                                strategy=strat,
-                                kbits=kb,
-                                upgrade_policy=args.upgrade_policy,
-                                upgraded_edges=list(upgrade_edges_cache.get(uk, [])),
-                                knobs=knobs,
-                                seeds=seeds,
-                                targets=targets,
-                                load_grid=load_grid,
-                                load_min=args.load_min,
-                                load_max=args.load_max,
-                                load_tol=args.load_tol,
-                                binary_search=args.binary_search,
-                                horizon_s=args.horizon_s,
-                                tau_s=args.tau_s,
-                                otp_data_rate_bps=args.otp_data_rate_bps,
-                                otp_session_duration_s=args.otp_session_duration_s,
-                                otp_directions=args.otp_directions,
-                                swap_schedule=args.swap_schedule,
+                        if args.task_granularity == "topo_policy":
+                            seed_groups = [seeds]
+                        else:
+                            seed_groups = [[s] for s in seeds]
+                        for seed_group in seed_groups:
+                            tasks.append(
+                                RobustEvalTask(
+                                    topology_id=args.topology_id,
+                                    pair=pair,
+                                    path_edges=path_edges,
+                                    eta_val=eta_val,
+                                    upgrade_k=uk,
+                                    strategy=strat,
+                                    kbits=kb,
+                                    upgrade_policy=args.upgrade_policy,
+                                    upgraded_edges=list(upgrade_edges_cache.get(uk, [])),
+                                    knobs=knobs,
+                                    seeds=seed_group,
+                                    targets=targets,
+                                    load_grid=load_grid,
+                                    load_min=args.load_min,
+                                    load_max=args.load_max,
+                                    load_tol=args.load_tol,
+                                    binary_search=args.binary_search,
+                                    horizon_s=args.horizon_s,
+                                    tau_s=args.tau_s,
+                                    otp_data_rate_bps=args.otp_data_rate_bps,
+                                    otp_session_duration_s=args.otp_session_duration_s,
+                                    otp_directions=args.otp_directions,
+                                    swap_schedule=args.swap_schedule,
+                                    seed=seed_group[0] if len(seed_group) == 1 else None,
+                                )
                             )
-                        )
 
     mp_ctx = get_mp_context(args.mp_start_method or None)
     print(
@@ -461,9 +486,42 @@ def main():
     results = []
     try:
         with ProcessPoolExecutor(max_workers=effective_workers, mp_context=mp_ctx) as ex:
+            worker_pids = collect_worker_pids(ex, effective_workers)
             fut_map = {ex.submit(_eval_robustness_task, t): t for t in tasks}
-            for fut in as_completed(fut_map):
-                results.append(fut.result())
+            if args.utilization_monitor_samples <= 0:
+                for fut in as_completed(fut_map):
+                    results.append(fut.result())
+            else:
+                pending = set(fut_map.keys())
+                monitor_records = []
+                monitor_left = args.utilization_monitor_samples
+                monitor_interval = max(0.5, args.utilization_monitor_seconds)
+                min_cpu = 0.7 * effective_workers * 100.0
+                while pending:
+                    done, pending = wait(pending, timeout=monitor_interval, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        results.append(fut.result())
+                    if monitor_left > 0 and pending:
+                        sample = sample_pid_cpu(worker_pids, interval_s=0.5)
+                        aggregate_cpu = sum(cpu for _, cpu in sample.values())
+                        active_workers = sum(1 for state, cpu in sample.values() if cpu >= 50.0 and "R" in state)
+                        monitor_records.append(
+                            {
+                                "active_workers": active_workers,
+                                "aggregate_cpu": aggregate_cpu,
+                                "worker_cpu": sample,
+                                "pending_tasks": len(pending),
+                            }
+                        )
+                        if aggregate_cpu < min_cpu:
+                            for fut in pending:
+                                fut.cancel()
+                            raise SystemExit(
+                                f"Utilization dropped below threshold: aggregate_cpu={aggregate_cpu:.1f}% "
+                                f"(min {min_cpu:.1f}%), pending={len(pending)}. "
+                                f"active_workers={active_workers}."
+                            )
+                        monitor_left -= 1
     except Exception as exc:
         if args.allow_thread_fallback:
             print(f"ProcessPool failed ({exc}); falling back to ThreadPool")
@@ -473,13 +531,19 @@ def main():
                     results.append(fut.result())
         else:
             raise SystemExit(f"ProcessPool failed: {exc}") from exc
+    if "monitor_records" in locals():
+        report = {
+            "worker_pids": worker_pids,
+            "samples": monitor_records,
+        }
+        (args.out_dir / "parallel_runtime_report.json").write_text(json.dumps(report, indent=2))
 
     # write raw (load-level) and pair-level frontier
     with raw_path.open("w", newline="") as f_raw:
         writer = csv.writer(f_raw)
         writer.writerow(raw_headers)
         for pair, eta_val, strat, uk, kb, load_rows, frontier_rows in results:
-            for load, mean_av, std_av, runs in load_rows:
+            for load, mean_av, std_av, runs, seed in load_rows:
                 writer.writerow(
                     [
                         args.topology_id,
@@ -493,6 +557,7 @@ def main():
                         mean_av,
                         std_av,
                         runs,
+                        seed,
                     ]
                 )
 
@@ -512,6 +577,7 @@ def main():
                 "kbits",
                 "target",
                 "frontier_load",
+                "seed",
             ],
         )
         writer.writeheader()
