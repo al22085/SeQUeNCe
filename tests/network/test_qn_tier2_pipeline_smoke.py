@@ -142,4 +142,4 @@ def test_tier2_pipeline_smoke():
             cwd=Path(__file__).resolve().parents[2],
         )
 
-        assert (out_dir / "plots_linearity" / "paper_key_findings.md").exists()
+        assert (out_dir / "plots_linearity" / "tier2_key_findings.md").exists()

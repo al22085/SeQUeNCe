@@ -57,7 +57,7 @@ def test_generate_paper_key_findings_smoke(tmp_path: Path):
         )
         writer.writerow(["TOY", "short_1", "404", "false", "", "", "", "", ""])
 
-    out_md = plots_dir / "paper_key_findings.md"
+    out_md = plots_dir / "tier2_key_findings.md"
     subprocess.run(
         [
             "python",

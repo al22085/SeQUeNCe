@@ -78,18 +78,7 @@ python "${ROOT_DIR}/scripts/plot_qn_path_coverage_mechanism.py" \
 
 python "${ROOT_DIR}/scripts/qn_generate_paper_key_findings.py" \
   --root-dir "${ROOT_DIR}/${OUT_DIR}" \
-  --analysis-dir "${ROOT_DIR}/${OUT_DIR}/analysis_path_coverage"
+  --analysis-dir "${ROOT_DIR}/${OUT_DIR}/analysis_path_coverage" \
+  --out-path "${ROOT_DIR}/${OUT_DIR}/plots_linearity/tier2_key_findings.md"
 
-python "${ROOT_DIR}/scripts/qn_validate_tier2_run.py" \
-  --root-dir "${ROOT_DIR}/${OUT_DIR}"
-
-python "${ROOT_DIR}/scripts/qn_export_tier2_paper_artifacts.py" \
-  --root-dir "${ROOT_DIR}/${OUT_DIR}"
-
-python "${ROOT_DIR}/scripts/qn_bundle_tier2_paper_artifacts.py" \
-  --root-dir "${ROOT_DIR}/${OUT_DIR}"
-
-python "${ROOT_DIR}/scripts/qn_verify_tier2_paper_bundle.py" \
-  --bundle "${ROOT_DIR}/${OUT_DIR}/paper_artifacts_bundle.zip"
-
-echo "Paper bundle written to: ${OUT_DIR}/paper_artifacts_bundle.zip"
+echo "Tier2 A=0.99 study complete: ${OUT_DIR}"

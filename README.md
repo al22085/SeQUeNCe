@@ -100,6 +100,24 @@ python utils/draw_topo.py example/starlight.json
 ```
 This script also supports a flag `-m` to visualize BSM nodes created by default on quantum links between routers.
 
+## Testing (CI-friendly)
+Full `pytest -q` can exceed 120s in some environments. Use chunked runs for deterministic coverage:
+```
+pytest -q tests/network/test_qn_parallel_verify.py \
+  tests/network/test_qn_select_pairs_by_sp_distance.py \
+  tests/network/test_qn_select_pairs_by_sp_distance_missing.py
+pytest -q tests/network/test_qn_run_topology_policy_upgrade_curves_smoke.py \
+  tests/network/test_qn_run_topology_policy_upgrade_curves_preflight_smoke.py \
+  tests/network/test_qn_run_topology_policy_upgrade_curves_auto_select_smoke.py \
+  tests/network/test_qn_run_topology_policy_upgrade_curves_no_node_filter.py \
+  tests/network/test_qn_run_topology_policy_upgrade_curves_insufficient.py
+pytest -q tests/network/test_qn_topologybench_fetch.py \
+  tests/network/test_qn_topologybench_generic_import_list_select.py \
+  tests/network/test_qn_import_topologybench.py
+pytest -q tests/network/test_qn_sweep_pair_tolerance_smoke.py \
+  tests/network/test_qn_topology_feasibility_selection.py
+```
+
 ## Contact
 If you have questions, please contact [Caitao Zhan](https://caitaozhan.github.io/) at [czhan@anl.gov](mailto:czhan@anl.gov).
 

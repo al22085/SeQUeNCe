@@ -10,14 +10,14 @@ from typing import Dict, List
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Generate paper_key_findings.md from computed CSVs.")
+    p = argparse.ArgumentParser(description="Generate tier2_key_findings.md from computed CSVs.")
     p.add_argument("--root-dir", type=Path, required=True, help="Run root directory.")
     p.add_argument("--analysis-dir", type=Path, default=None, help="Path coverage analysis directory.")
     p.add_argument(
         "--out-path",
         type=Path,
         default=None,
-        help="Markdown output path (default: <root>/plots_linearity/paper_key_findings.md).",
+        help="Markdown output path (default: <root>/plots_linearity/tier2_key_findings.md).",
     )
     return p.parse_args()
 
@@ -35,7 +35,7 @@ def main() -> None:
     args = parse_args()
     root = args.root_dir
     analysis_dir = args.analysis_dir or (root / "analysis_path_coverage")
-    out_path = args.out_path or (root / "plots_linearity" / "paper_key_findings.md")
+    out_path = args.out_path or (root / "plots_linearity" / "tier2_key_findings.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     summary_path = root / "line_vs_curve_summary.csv"
@@ -84,7 +84,7 @@ def main() -> None:
     coverage_label = [r for r in coverage_rows if r.get("scope") == "label"]
 
     lines: List[str] = []
-    lines.append("# Paper Key Findings (computed)")
+    lines.append("# Tier2 Key Findings (computed)")
     lines.append("")
     lines.append("## Line vs Curve (policy)")
     lines.extend(fmt_rows(policy_rows))
