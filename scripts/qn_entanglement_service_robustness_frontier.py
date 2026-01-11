@@ -358,6 +358,8 @@ def main():
         with args.pairs_csv.open() as f:
             reader = csv.DictReader(f)
             for row in reader:
+                if row.get("found", "").lower() in ("false", "0"):
+                    continue
                 src_key = "src" if "src" in row else "src_node"
                 dst_key = "dst" if "dst" in row else "dst_node"
                 if src_key not in row or dst_key not in row:

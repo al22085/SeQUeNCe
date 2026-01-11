@@ -169,12 +169,16 @@ def summarize_pair_errors(pairs_csv: Path) -> Dict[str, Dict[str, float]]:
     rows = load_csv(pairs_csv)
     by_label: Dict[str, List[Dict[str, str]]] = {}
     for r in rows:
+        if r.get("found", "").lower() in ("false", "0"):
+            continue
         label = r["label"].split("_")[0]
         by_label.setdefault(label, []).append(r)
     summary: Dict[str, Dict[str, float]] = {}
     for label, vals in by_label.items():
-        abs_errs = [float(v["abs_error_km"]) for v in vals]
-        rel_errs = [float(v["rel_error"]) for v in vals]
+        abs_errs = [float(v["abs_error_km"]) for v in vals if v["abs_error_km"]]
+        rel_errs = [float(v["rel_error"]) for v in vals if v["rel_error"]]
+        if not abs_errs or not rel_errs:
+            continue
         abs_errs_sorted = sorted(abs_errs)
         rel_errs_sorted = sorted(rel_errs)
         mid = len(abs_errs_sorted) // 2
@@ -185,6 +189,21 @@ def summarize_pair_errors(pairs_csv: Path) -> Dict[str, Dict[str, float]]:
             "rel_max": max(rel_errs_sorted),
         }
     return summary
+
+
+def summarize_missing_pairs(pairs_csv: Path) -> Dict[str, object]:
+    rows = load_csv(pairs_csv)
+    missing_by_label: Dict[str, int] = {}
+    total_missing = 0
+    for r in rows:
+        if r.get("found", "").lower() in ("false", "0"):
+            label = r["label"].split("_")[0]
+            missing_by_label[label] = missing_by_label.get(label, 0) + 1
+            total_missing += 1
+    return {
+        "total_missing": total_missing,
+        "missing_by_label": missing_by_label,
+    }
 
 
 def ensure_distance_csv(
@@ -347,9 +366,8 @@ def main():
 
         targets = parse_float_list(args.targets_km)
         dist_dir = Path("data/topologybench_distances")
-        eligible = []
         eligibility_rows = []
-        eligible_rows = []
+        selection_rows = []
         for r in rows:
             topo_id = r["topology_id"]
             edge_csv = ensure_distance_csv(
@@ -382,20 +400,19 @@ def main():
                     "eligible": ok,
                 }
             )
-            if ok:
-                eligible.append(r)
-                eligible_rows.append(
-                    {
-                        "topology_id": topo_id,
-                        "n_nodes": r["n_nodes"],
-                        "n_edges": r["n_edges"],
-                        "avg_degree": r["avg_degree"],
-                        "diameter_km": f"{diameter_km:.2f}",
-                    }
-                )
+            selection_rows.append(
+                {
+                    "topology_id": topo_id,
+                    "n_nodes": r["n_nodes"],
+                    "n_edges": r["n_edges"],
+                    "avg_degree": r["avg_degree"],
+                    "diameter_km": f"{diameter_km:.2f}",
+                }
+            )
 
         print(f"Topologies found: {len(rows)}")
-        print(f"Eligible under tolerance: {len(eligible)}")
+        eligible_count = sum(1 for r in eligibility_rows if r["eligible"])
+        print(f"Eligible under tolerance: {eligible_count}")
         for row in eligibility_rows:
             counts_str = ", ".join([f"{k}={row[k]}" for k in row if k.startswith("count_")])
             print(f"{row['topology_id']} diameter_km={row['diameter_km']} {counts_str} eligible={row['eligible']}")
@@ -406,18 +423,17 @@ def main():
             writer.writeheader()
             writer.writerows(eligibility_rows)
 
-        eligible_csv = args.out_dir / "topologybench_list_eligible.csv"
-        with eligible_csv.open("w", newline="") as f:
+        selection_csv = args.out_dir / "topologybench_list_selection.csv"
+        with selection_csv.open("w", newline="") as f:
             fieldnames = ["topology_id", "n_nodes", "n_edges", "avg_degree", "diameter_km"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(eligible_rows)
+            writer.writerows(selection_rows)
 
-        if len(eligible) < args.auto_select_topologies:
+        if len(selection_rows) < args.auto_select_topologies:
             raise SystemExit(
-                f"Not enough topologies can realize targets within tolerance. "
-                f"Eligible={len(eligible)} requested={args.auto_select_topologies}. "
-                f"Relax --pair-distance-rel-tol/--pair-distance-abs-tol-km or reduce targets."
+                f"Not enough topologies available in list: have {len(selection_rows)}, "
+                f"requested {args.auto_select_topologies}."
             )
 
         selected_csv = args.out_dir / "topologybench_selected.csv"
@@ -425,12 +441,14 @@ def main():
             "python",
             "scripts/qn_select_diverse_topologies.py",
             "--list-csv",
-            str(eligible_csv),
+            str(selection_csv),
             "--k",
             str(args.auto_select_topologies),
             "--out-csv",
             str(selected_csv),
         ]
+        if args.min_nodes is None and args.max_nodes is None:
+            print("node_filter=none")
         if args.min_nodes is not None:
             select_cmd += ["--min-nodes", str(args.min_nodes)]
         if args.max_nodes is not None:
@@ -444,9 +462,14 @@ def main():
             "selected_topologies": topo_ids,
             "source_list_csv": str(list_csv),
             "eligibility_list_csv": str(eligibility_csv),
-            "eligible_list_csv": str(eligible_csv),
+            "selection_list_csv": str(selection_csv),
             "pair_distance_abs_tol_km": args.pair_distance_abs_tol_km,
             "pair_distance_rel_tol": args.pair_distance_rel_tol,
+            "node_filter": {
+                "min_nodes": args.min_nodes,
+                "max_nodes": args.max_nodes,
+                "applied": args.min_nodes is not None or args.max_nodes is not None,
+            },
         }
         (args.out_dir / "topology_selection.json").write_text(json.dumps(selection_meta, indent=2))
 
@@ -525,8 +548,9 @@ def main():
                 str(pairs_csv),
             ]
         )
-        # verify errors are within tolerance (median per label group)
+        # verify errors are within tolerance (median per label group) for found pairs
         summary_errs = summarize_pair_errors(pairs_csv)
+        missing_info = summarize_missing_pairs(pairs_csv)
         for label, errs in summary_errs.items():
             if args.pair_distance_abs_tol_km and errs["abs_median"] > args.pair_distance_abs_tol_km:
                 raise SystemExit(
@@ -539,6 +563,8 @@ def main():
                     f"rel tol {args.pair_distance_rel_tol}"
                 )
         print(f"{topo_id} pair error summary: {summary_errs}")
+        if missing_info["total_missing"]:
+            print(f"{topo_id} missing pairs: {missing_info}")
         for policy in policies:
             run_out = topo_dir / policy
             run_out.mkdir(parents=True, exist_ok=True)
@@ -684,6 +710,8 @@ def main():
                         "classification": row.get("classification", ""),
                         "clipped": row.get("clipped", ""),
                         "load_max_used": load_max_used,
+                        "missing_pairs_total": missing_info["total_missing"],
+                        "missing_pairs_by_label": json.dumps(missing_info["missing_by_label"]),
                         "pairs_csv": str(pairs_csv),
                         "curve_points_csv": str(curve_points),
                         "curve_metrics_csv": str(curve_metrics),
@@ -709,6 +737,8 @@ def main():
                 "classification",
                 "clipped",
                 "load_max_used",
+                "missing_pairs_total",
+                "missing_pairs_by_label",
                 "pairs_csv",
                 "curve_points_csv",
                 "curve_metrics_csv",

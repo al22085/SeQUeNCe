@@ -124,8 +124,14 @@ def main() -> None:
             print(f"Skipping {topo_id}: missing pairs_repr3.csv")
             continue
         pairs_rows = load_csv(pairs_csv)
-        pairs = [(r["src_node"], r["dst_node"]) for r in pairs_rows]
-        pair_label = {f"{r['src_node']}-{r['dst_node']}": label_base(r["label"]) for r in pairs_rows}
+        filtered_rows = [
+            r for r in pairs_rows if r.get("found", "").lower() not in ("false", "0")
+        ]
+        pairs = [(r["src_node"], r["dst_node"]) for r in filtered_rows]
+        pair_label = {f"{r['src_node']}-{r['dst_node']}": label_base(r["label"]) for r in filtered_rows}
+        if not pairs:
+            print(f"Skipping {topo_id}: no valid pairs (all missing under tolerance).")
+            continue
 
         edge_csv = args.distances_dir / f"{topo_id}.csv"
         if not edge_csv.exists():

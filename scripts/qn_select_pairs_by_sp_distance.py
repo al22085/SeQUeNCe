@@ -87,11 +87,6 @@ def main():
             err = abs(sp_km - target)
             rel_err = err / target if target > 0 else 0.0
             candidates.append((err, rel_err, sp_km, s, t))
-        if len(candidates) < args.pairs_per_target:
-            raise SystemExit(
-                f"Not enough pairs within tolerance for target {target} km: "
-                f"need {args.pairs_per_target}, have {len(candidates)}"
-            )
         candidates.sort(key=lambda x: (x[0], x[2], x[3]))
         label_base = labels[idx] if idx < len(labels) else f"target_{target}"
         # first pass: avoid duplicates across targets
@@ -113,7 +108,40 @@ def main():
         for pick_idx, c in enumerate(picks, start=1):
             used.add((c[3], c[4]))
             label = label_base if args.pairs_per_target == 1 else f"{label_base}_{pick_idx}"
-            selected.append((args.topology_id, label, target, c[3], c[4], c[2], c[0], c[1]))
+            selected.append(
+                (
+                    args.topology_id,
+                    label,
+                    target,
+                    True,
+                    c[3],
+                    c[4],
+                    c[2],
+                    c[0],
+                    c[1],
+                )
+            )
+        if len(picks) < args.pairs_per_target:
+            missing = args.pairs_per_target - len(picks)
+            for miss_idx in range(len(picks) + 1, args.pairs_per_target + 1):
+                label = label_base if args.pairs_per_target == 1 else f"{label_base}_{miss_idx}"
+                selected.append(
+                    (
+                        args.topology_id,
+                        label,
+                        target,
+                        False,
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                    )
+                )
+            print(
+                f"WARNING: target {target} km has only {len(picks)} pairs within tolerance; "
+                f"added {missing} missing placeholders."
+            )
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="") as f:
@@ -123,6 +151,7 @@ def main():
                 "topology_id",
                 "label",
                 "target_km",
+                "found",
                 "src_node",
                 "dst_node",
                 "dist_km",
