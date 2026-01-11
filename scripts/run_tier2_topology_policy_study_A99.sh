@@ -89,4 +89,7 @@ python "${ROOT_DIR}/scripts/qn_export_tier2_paper_artifacts.py" \
 python "${ROOT_DIR}/scripts/qn_bundle_tier2_paper_artifacts.py" \
   --root-dir "${ROOT_DIR}/${OUT_DIR}"
 
+python "${ROOT_DIR}/scripts/qn_verify_tier2_paper_bundle.py" \
+  --bundle "${ROOT_DIR}/${OUT_DIR}/paper_artifacts_bundle.zip"
+
 echo "Paper bundle written to: ${OUT_DIR}/paper_artifacts_bundle.zip"

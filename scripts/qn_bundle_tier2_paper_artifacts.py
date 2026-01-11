@@ -8,7 +8,7 @@ import hashlib
 import json
 import subprocess
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -196,7 +196,7 @@ def build_bundle_manifest(root: Path, validation: Dict[str, object]) -> Dict[str
         )
     except Exception:
         pass
-    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "created_at_iso": created_at,
         "root_dir_basename": root.name,
@@ -213,6 +213,28 @@ def build_bundle_manifest(root: Path, validation: Dict[str, object]) -> Dict[str
     }
 
 
+def ensure_bundle_usage_readme(root: Path) -> None:
+    readme = root / "paper_artifacts" / "README.md"
+    if not readme.exists():
+        return
+    text = readme.read_text()
+    if "Bundle usage" in text:
+        return
+    addition = "\n".join(
+        [
+            "",
+            "## Bundle usage",
+            "1) Verify bundle integrity:",
+            "   python scripts/qn_verify_tier2_paper_bundle.py --bundle paper_artifacts_bundle.zip",
+            "2) Unpack safely:",
+            "   python scripts/qn_unpack_tier2_paper_bundle.py --bundle paper_artifacts_bundle.zip --out-dir <dest>",
+            "3) Use paper_artifacts/tables/*.tex and paper_artifacts/figures/*.png in your LaTeX repo.",
+            "",
+        ]
+    )
+    readme.write_text(text + addition)
+
+
 def main() -> None:
     args = parse_args()
     root = args.root_dir
@@ -225,17 +247,20 @@ def main() -> None:
 
     validation_path = root / "paper_artifacts" / "validation_report.json"
     validation = json.loads(validation_path.read_text()) if validation_path.exists() else {}
+    ensure_bundle_usage_readme(root)
 
     files = collect_files(root, include)
     if not files:
         raise SystemExit("No files collected for bundling; check --include and root-dir.")
 
-    sha_lines: List[str] = []
-    for path, rel in files:
-        sha_lines.append(f"{sha256_bytes(read_bytes(path))}  {rel}")
-
     bundle_manifest = build_bundle_manifest(root, validation)
     manifest_bytes = json.dumps(bundle_manifest, indent=2).encode()
+
+    sha_entries: List[Tuple[str, str]] = []
+    for path, rel in files:
+        sha_entries.append((rel, sha256_bytes(read_bytes(path))))
+    sha_entries.append(("bundle_manifest.json", sha256_bytes(manifest_bytes)))
+    sha_lines = [f"{sha}  {rel}" for rel, sha in sorted(sha_entries, key=lambda x: x[0])]
 
     with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path, rel in files:
