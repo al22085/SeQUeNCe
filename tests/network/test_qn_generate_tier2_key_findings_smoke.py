@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 
-def test_generate_paper_key_findings_smoke(tmp_path: Path):
+def test_generate_tier2_key_findings_smoke(tmp_path: Path):
     root = tmp_path / "run"
     root.mkdir(parents=True, exist_ok=True)
     plots_dir = root / "plots_linearity"
@@ -61,7 +61,7 @@ def test_generate_paper_key_findings_smoke(tmp_path: Path):
     subprocess.run(
         [
             "python",
-            "scripts/qn_generate_paper_key_findings.py",
+            "scripts/qn_generate_tier2_key_findings.py",
             "--root-dir",
             str(root),
             "--analysis-dir",

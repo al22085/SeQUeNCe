@@ -132,7 +132,7 @@ def test_tier2_pipeline_smoke():
         subprocess.run(
             [
                 "python",
-                "scripts/qn_generate_paper_key_findings.py",
+                "scripts/qn_generate_tier2_key_findings.py",
                 "--root-dir",
                 str(out_dir),
                 "--analysis-dir",

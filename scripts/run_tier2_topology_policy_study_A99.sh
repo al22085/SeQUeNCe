@@ -76,7 +76,7 @@ python "${ROOT_DIR}/scripts/plot_qn_path_coverage_mechanism.py" \
   --analysis-dir "${ROOT_DIR}/${OUT_DIR}/analysis_path_coverage" \
   --workers 2
 
-python "${ROOT_DIR}/scripts/qn_generate_paper_key_findings.py" \
+python "${ROOT_DIR}/scripts/qn_generate_tier2_key_findings.py" \
   --root-dir "${ROOT_DIR}/${OUT_DIR}" \
   --analysis-dir "${ROOT_DIR}/${OUT_DIR}/analysis_path_coverage" \
   --out-path "${ROOT_DIR}/${OUT_DIR}/plots_linearity/tier2_key_findings.md"
