@@ -80,4 +80,10 @@ python "${ROOT_DIR}/scripts/qn_generate_paper_key_findings.py" \
   --root-dir "${ROOT_DIR}/${OUT_DIR}" \
   --analysis-dir "${ROOT_DIR}/${OUT_DIR}/analysis_path_coverage"
 
-echo "Tier2 A=0.99 study complete: ${OUT_DIR}"
+python "${ROOT_DIR}/scripts/qn_validate_tier2_run.py" \
+  --root-dir "${ROOT_DIR}/${OUT_DIR}"
+
+python "${ROOT_DIR}/scripts/qn_export_tier2_paper_artifacts.py" \
+  --root-dir "${ROOT_DIR}/${OUT_DIR}"
+
+echo "Paper artifacts written to: ${OUT_DIR}/paper_artifacts"
