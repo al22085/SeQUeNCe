@@ -109,17 +109,32 @@ def write_latex_shim(latex_dir: Path) -> None:
         "\\newcommand{\\TierTwoTableLinearityPath}{../tables/table_linearity_summary.tex}",
         "\\newcommand{\\TierTwoCoverageThresholdsPath}{../tables/table_coverage_thresholds.tex}",
         "\\newcommand{\\TierTwoRunMetadataPath}{../tables/table_run_metadata.tex}",
-        "\\newcommand{\\TierTwoFigLinearityPath}{../figs/fig_linearity_overview.png}",
-        "\\newcommand{\\TierTwoFigPathCoveragePath}{../figs/fig_path_coverage_overview.png}",
-        "\\newcommand{\\TierTwoFigPolicyCurvesPath}{../figs/fig_policy_curves_overview.png}",
+        "\\newcommand{\\TierTwoFigLinearityPathPDF}{../figs/fig_linearity_overview.pdf}",
+        "\\newcommand{\\TierTwoFigLinearityPathPNG}{../figs/fig_linearity_overview.png}",
+        "\\newcommand{\\TierTwoFigPathCoveragePathPDF}{../figs/fig_path_coverage_overview.pdf}",
+        "\\newcommand{\\TierTwoFigPathCoveragePathPNG}{../figs/fig_path_coverage_overview.png}",
+        "\\newcommand{\\TierTwoFigPolicyCurvesPathPDF}{../figs/fig_policy_curves_overview.pdf}",
+        "\\newcommand{\\TierTwoFigPolicyCurvesPathPNG}{../figs/fig_policy_curves_overview.png}",
         "",
         "\\newcommand{\\TierTwoLinearityTable}{\\input{\\TierTwoTableLinearityPath}}",
         "\\newcommand{\\TierTwoCoverageThresholdsTable}{\\input{\\TierTwoCoverageThresholdsPath}}",
         "\\newcommand{\\TierTwoRunMetadataTable}{\\input{\\TierTwoRunMetadataPath}}",
         "",
-        "\\newcommand{\\TierTwoFigLinearity}{\\includegraphics[width=\\linewidth]{\\TierTwoFigLinearityPath}}",
-        "\\newcommand{\\TierTwoFigPathCoverage}{\\includegraphics[width=\\linewidth]{\\TierTwoFigPathCoveragePath}}",
-        "\\newcommand{\\TierTwoFigPolicyCurves}{\\includegraphics[width=\\linewidth]{\\TierTwoFigPolicyCurvesPath}}",
+        "\\newcommand{\\TierTwoFigLinearity}{%",
+        "\\IfFileExists{\\TierTwoFigLinearityPathPDF}",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigLinearityPathPDF}}%",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigLinearityPathPNG}}%",
+        "}",
+        "\\newcommand{\\TierTwoFigPathCoverage}{%",
+        "\\IfFileExists{\\TierTwoFigPathCoveragePathPDF}",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigPathCoveragePathPDF}}%",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigPathCoveragePathPNG}}%",
+        "}",
+        "\\newcommand{\\TierTwoFigPolicyCurves}{%",
+        "\\IfFileExists{\\TierTwoFigPolicyCurvesPathPDF}",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigPolicyCurvesPathPDF}}%",
+        "{\\includegraphics[width=\\linewidth]{\\TierTwoFigPolicyCurvesPathPNG}}%",
+        "}",
         "",
     ]
     shim_path.write_text("\n".join(shim_lines))
@@ -193,6 +208,30 @@ def main() -> None:
         if not src:
             continue
         copy_if_exists(src, figs_dir / Path(src).name)
+
+    # Ensure PDF versions exist (fallback to png->pdf if missing).
+    try:
+        import matplotlib.image as mpimg  # type: ignore
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
+        mpimg = None
+        plt = None
+    if mpimg is not None and plt is not None:
+        for stem in ["fig_linearity_overview", "fig_path_coverage_overview", "fig_policy_curves_overview"]:
+            png = figs_dir / f"{stem}.png"
+            pdf = figs_dir / f"{stem}.pdf"
+            if pdf.exists() or not png.exists():
+                continue
+            try:
+                img = mpimg.imread(png)
+            except Exception:
+                continue
+            plt.figure(figsize=(6, 4))
+            plt.imshow(img)
+            plt.axis("off")
+            plt.tight_layout(pad=0)
+            plt.savefig(pdf, format="pdf", bbox_inches="tight")
+            plt.close()
 
     # Generate paper_key_findings if missing.
     key_findings = plots_linearity / "paper_key_findings.md"
@@ -309,6 +348,7 @@ def main() -> None:
         "3) Use macros: \\TierTwoLinearityTable, \\TierTwoCoverageThresholdsTable,",
         "   \\TierTwoRunMetadataTable, \\TierTwoFigLinearity, \\TierTwoFigPathCoverage,",
         "   \\TierTwoFigPolicyCurves.",
+        "   (PDF is preferred if present; PNG fallback via \\IfFileExists.)",
         "",
         "## Notes",
         "All outputs are generated from computed CSVs under the Tier2 run root.",

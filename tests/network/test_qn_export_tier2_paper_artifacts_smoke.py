@@ -57,3 +57,5 @@ def test_export_tier2_paper_artifacts_smoke(tmp_path: Path) -> None:
     assert (out_dir / "tables" / "table_run_metadata.tex").exists()
     assert (out_dir / "figures" / "fig_linearity_overview.png").exists()
     assert (out_dir / "figures" / "fig_path_coverage_overview.png").exists()
+    assert (out_dir / "figs" / "fig_linearity_overview.png").exists()
+    assert (out_dir / "latex_include" / "tier2_paper_artifacts.tex").exists()

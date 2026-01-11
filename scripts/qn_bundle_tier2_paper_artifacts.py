@@ -56,7 +56,13 @@ def run_validator(root: Path) -> None:
 def ensure_exporter(root: Path) -> None:
     paper_dir = root / "paper_artifacts"
     if paper_dir.exists():
-        return
+        required = [
+            paper_dir / "latex_include" / "tier2_paper_artifacts.tex",
+            paper_dir / "tables" / "table_linearity_summary.tex",
+            paper_dir / "figs" / "fig_linearity_overview.png",
+        ]
+        if all(p.exists() for p in required):
+            return
     subprocess.run(
         ["python", "scripts/qn_export_tier2_paper_artifacts.py", "--root-dir", str(root)],
         check=True,
