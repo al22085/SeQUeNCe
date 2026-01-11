@@ -28,13 +28,16 @@ P1=pa
 P2=per
 PATTERN="${P1}${P2}"
 
-rg -n "$PATTERN" -S --glob '!out/**' --glob '!.venv/**' . || true
+rg -n "$PATTERN" -S --glob "!out/**" --glob "!.venv/**" . || true
 ```
 
 ## C) Outdir audits (optional, local artifacts only)
 These do NOT indicate tracked content; they only validate local outputs:
 ```
-for d in out/tier2_A099_researchonly_5topos out/tier2_smoke_no_paper_v4; do
+REAL_OUTDIR=out/tier2_A099_researchonly_5topos
+SMOKE_OUTDIR=out/tier2_smoke_no_paper_v4
+
+for d in "$REAL_OUTDIR" "$SMOKE_OUTDIR"; do
   echo "=== OUTDIR: $d ==="
   test -d "$d" && echo "exists" || echo "MISSING"
   rg --files -g "*.tex" "$d" || true
