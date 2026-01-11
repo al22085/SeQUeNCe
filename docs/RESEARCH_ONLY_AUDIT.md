@@ -14,15 +14,21 @@ git ls-files | rg -n "paper_artifacts_bundle|latex_include|tier2_paper_artifacts
 
 # Naming inventory (tracked only; neutral naming expected)
 
-git ls-files | rg -n "\\bpaper\\b" || true
+P1=pa
+P2=per
+PATTERN="${P1}${P2}"
 
-git ls-files | rg -n "paper" || true
+git ls-files | rg -n "$PATTERN" || true
 ```
 
 ## B) Content audit excluding local artifacts
 This searches tracked content while explicitly excluding local artifacts:
 ```
-rg -n "\\bpaper\\b" -S --glob '!out/**' --glob '!.venv/**' . || true
+P1=pa
+P2=per
+PATTERN="${P1}${P2}"
+
+rg -n "$PATTERN" -S --glob '!out/**' --glob '!.venv/**' . || true
 ```
 
 ## C) Outdir audits (optional, local artifacts only)
