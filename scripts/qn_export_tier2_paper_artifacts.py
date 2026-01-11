@@ -100,14 +100,59 @@ def copy_if_exists(src: Path, dst: Path) -> Optional[Path]:
     return dst
 
 
+def write_latex_shim(latex_dir: Path) -> None:
+    latex_dir.mkdir(parents=True, exist_ok=True)
+    shim_path = latex_dir / "tier2_paper_artifacts.tex"
+    shim_lines = [
+        "% Tier2 paper artifacts shim (requires graphicx).",
+        "\\newcommand{\\TierTwoArtifactsRoot}{../}",
+        "\\newcommand{\\TierTwoTableLinearityPath}{../tables/table_linearity_summary.tex}",
+        "\\newcommand{\\TierTwoCoverageThresholdsPath}{../tables/table_coverage_thresholds.tex}",
+        "\\newcommand{\\TierTwoRunMetadataPath}{../tables/table_run_metadata.tex}",
+        "\\newcommand{\\TierTwoFigLinearityPath}{../figs/fig_linearity_overview.png}",
+        "\\newcommand{\\TierTwoFigPathCoveragePath}{../figs/fig_path_coverage_overview.png}",
+        "\\newcommand{\\TierTwoFigPolicyCurvesPath}{../figs/fig_policy_curves_overview.png}",
+        "",
+        "\\newcommand{\\TierTwoLinearityTable}{\\input{\\TierTwoTableLinearityPath}}",
+        "\\newcommand{\\TierTwoCoverageThresholdsTable}{\\input{\\TierTwoCoverageThresholdsPath}}",
+        "\\newcommand{\\TierTwoRunMetadataTable}{\\input{\\TierTwoRunMetadataPath}}",
+        "",
+        "\\newcommand{\\TierTwoFigLinearity}{\\includegraphics[width=\\linewidth]{\\TierTwoFigLinearityPath}}",
+        "\\newcommand{\\TierTwoFigPathCoverage}{\\includegraphics[width=\\linewidth]{\\TierTwoFigPathCoveragePath}}",
+        "\\newcommand{\\TierTwoFigPolicyCurves}{\\includegraphics[width=\\linewidth]{\\TierTwoFigPolicyCurvesPath}}",
+        "",
+    ]
+    shim_path.write_text("\n".join(shim_lines))
+
+    example_path = latex_dir / "example.tex"
+    example_lines = [
+        "\\documentclass{article}",
+        "\\usepackage{graphicx}",
+        "\\input{tier2_paper_artifacts}",
+        "\\begin{document}",
+        "\\section*{Tier2 Artifacts Example}",
+        "\\TierTwoLinearityTable",
+        "\\TierTwoCoverageThresholdsTable",
+        "\\TierTwoRunMetadataTable",
+        "\\TierTwoFigLinearity",
+        "\\TierTwoFigPathCoverage",
+        "\\TierTwoFigPolicyCurves",
+        "\\end{document}",
+        "",
+    ]
+    example_path.write_text("\n".join(example_lines))
+
+
 def main() -> None:
     args = parse_args()
     root = args.root_dir
     out_dir = args.out_dir or (root / "paper_artifacts")
     out_dir.mkdir(parents=True, exist_ok=True)
     figures_dir = out_dir / "figures"
+    figs_dir = out_dir / "figs"
     tables_dir = out_dir / "tables"
     figures_dir.mkdir(parents=True, exist_ok=True)
+    figs_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
 
     summary_path = root / "line_vs_curve_summary.csv"
@@ -133,22 +178,21 @@ def main() -> None:
         plots_path_coverage / "ratio_vs_path_upgraded_fraction.png",
     )
 
-    copied = []
-    copied.append(
-        copy_if_exists(
-            plots_linearity / "fraction_nonlinear_by_policy.png",
-            figures_dir / "fig_linearity_overview.png",
-        )
+    fig_linearity = copy_if_exists(
+        plots_linearity / "fraction_nonlinear_by_policy.png",
+        figures_dir / "fig_linearity_overview.png",
     )
-    copied.append(
-        copy_if_exists(
-            plots_path_coverage / "ratio_vs_path_upgraded_fraction.png",
-            figures_dir / "fig_path_coverage_overview.png",
-        )
+    fig_path_cov = copy_if_exists(
+        plots_path_coverage / "ratio_vs_path_upgraded_fraction.png",
+        figures_dir / "fig_path_coverage_overview.png",
     )
     policy_curve = plots_linearity / "curvature_vs_max_ratio.png"
-    if policy_curve.exists():
-        copied.append(copy_if_exists(policy_curve, figures_dir / "fig_policy_curves_overview.png"))
+    fig_policy = copy_if_exists(policy_curve, figures_dir / "fig_policy_curves_overview.png")
+
+    for src in [fig_linearity, fig_path_cov, fig_policy]:
+        if not src:
+            continue
+        copy_if_exists(src, figs_dir / Path(src).name)
 
     # Generate paper_key_findings if missing.
     key_findings = plots_linearity / "paper_key_findings.md"
@@ -255,15 +299,23 @@ def main() -> None:
         "- table_run_metadata.tex: run configuration (tolerance, targets, policies, seeds).",
         "",
         "## Figures",
-        "- fig_linearity_overview.png: fraction_nonlinear by policy.",
-        "- fig_path_coverage_overview.png: ratio vs path_upgraded_fraction.",
-        "- fig_policy_curves_overview.png: optional policy curves (if available).",
+        "- figs/fig_linearity_overview.png: fraction_nonlinear by policy.",
+        "- figs/fig_path_coverage_overview.png: ratio vs path_upgraded_fraction.",
+        "- figs/fig_policy_curves_overview.png: optional policy curves (if available).",
+        "",
+        "## LaTeX include shim",
+        "1) \\usepackage{graphicx}",
+        "2) \\input{paper_artifacts/latex_include/tier2_paper_artifacts.tex}",
+        "3) Use macros: \\TierTwoLinearityTable, \\TierTwoCoverageThresholdsTable,",
+        "   \\TierTwoRunMetadataTable, \\TierTwoFigLinearity, \\TierTwoFigPathCoverage,",
+        "   \\TierTwoFigPolicyCurves.",
         "",
         "## Notes",
         "All outputs are generated from computed CSVs under the Tier2 run root.",
     ]
     readme.write_text("\n".join(lines) + "\n")
 
+    write_latex_shim(out_dir / "latex_include")
     print(f"Paper artifacts written to: {out_dir}")
 
 
