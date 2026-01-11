@@ -119,6 +119,8 @@ pytest -q tests/network/test_qn_sweep_pair_tolerance_smoke.py \
   tests/network/test_qn_generate_tier2_key_findings_smoke.py
 ```
 
+For a research-only audit checklist (tracked-file scans + optional outdir checks), see `docs/RESEARCH_ONLY_AUDIT.md`.
+
 ## Contact
 If you have questions, please contact [Caitao Zhan](https://caitaozhan.github.io/) at [czhan@anl.gov](mailto:czhan@anl.gov).
 
