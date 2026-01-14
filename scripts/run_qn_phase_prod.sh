@@ -3,6 +3,8 @@ set -euo pipefail
 
 MODE=${MODE:-full} # full or smoke
 OUT_DIR=${1:-out/qn_phase_${MODE}}
+WORKERS=${WORKERS:-}
+RESUME=${RESUME:-}
 
 if [[ "${MODE}" == "smoke" ]]; then
   DISTANCES=${DISTANCES:-"1000,2000"}
@@ -14,6 +16,16 @@ else
   ETAS=${ETAS:-"0.4,0.5,0.6,0.7,0.8,0.9,1.0"}
   SEEDS=${SEEDS:-"0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19"}
   NUM_TRIALS=${NUM_TRIALS:-50}
+fi
+
+WORKERS_ARG=()
+if [[ -n "${WORKERS}" ]]; then
+  WORKERS_ARG=(--workers "${WORKERS}")
+fi
+
+RESUME_ARG=()
+if [[ "${RESUME}" == "1" || "${RESUME}" == "true" ]]; then
+  RESUME_ARG=(--resume)
 fi
 
 python scripts/qn_phase_sweep.py \
@@ -32,6 +44,8 @@ python scripts/qn_phase_sweep.py \
   --fidelity ${FIDELITY:-0.5} \
   --eta-source ${ETA_SOURCE:-0.8} --eta-dest ${ETA_DEST:-0.8} \
   --dqt-eta-source ${DQT_ETA_SOURCE:-0.8} --dqt-eta-dest ${DQT_ETA_DEST:-0.8} \
+  "${WORKERS_ARG[@]}" \
+  "${RESUME_ARG[@]}" \
   --out-dir "${OUT_DIR}"
 
 python scripts/plot_qn_phase_sweep.py --in-agg "${OUT_DIR}/phase_agg.csv" --out-dir "${OUT_DIR}" --title "Hybrid distance×eta phase sweep (${MODE})"

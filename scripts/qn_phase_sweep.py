@@ -73,6 +73,60 @@ def build_args(base, strategy: str, distance: float, eta: float, seed: int) -> S
     )
 
 
+def cell_seed(base, strategy: str, distance: float, eta: float, seed: int) -> int:
+    key = f"{strategy}:{distance}:{eta}:{seed}:{base.base_seed}"
+    val = int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") % (2**31)
+    return base.base_seed + val
+
+
+def run_cell(base, key):
+    dist, eta, strat, seed = key
+    try:
+        ns = build_args(base, strat, dist, eta, seed)
+        ns.seed = cell_seed(base, strat, dist, eta, seed)
+        res = run_trials(ns)
+        return (
+            dist,
+            eta,
+            strat,
+            seed,
+            res["num_trials"],
+            res["satisfied"],
+            res["availability_req"],
+            res["mean_t_success"],
+            res["deadline_s"],
+            res["deadline_ps"],
+            res["setup_slack_s"],
+            base.attempt_rate_hz,
+            base.p_eg,
+            base.coherence_time_s,
+            base.p_bsm,
+            base.key_bits_per_pair,
+            "ok",
+            "",
+        )
+    except Exception as e:  # noqa: BLE001
+        return (
+            dist,
+            eta,
+            strat,
+            seed,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "error",
+            str(e),
+        )
+
+
 def write_csv(path: Path, headers: List[str], rows: Iterable[Tuple]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
@@ -156,11 +210,6 @@ def main():
                 if row.get("status", "ok") == "ok":
                     done.add((float(row["distance"]), float(row["eta"]), row["strategy"], int(row["seed"])))
 
-    def cell_seed(strategy: str, distance: float, eta: float, seed: int) -> int:
-        key = f"{strategy}:{distance}:{eta}:{seed}:{args.base_seed}"
-        val = int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") % (2**31)
-        return args.base_seed + val
-
     tasks = []
     for dist in distances:
         for eta in etas:
@@ -178,53 +227,6 @@ def main():
             writer.writerow(raw_headers)
             f_raw.flush()
 
-        def run_cell(key):
-            dist, eta, strat, seed = key
-            try:
-                ns = build_args(args, strat, dist, eta, seed)
-                ns.seed = cell_seed(strat, dist, eta, seed)
-                res = run_trials(ns)
-                return (
-                    dist,
-                    eta,
-                    strat,
-                    seed,
-                    res["num_trials"],
-                    res["satisfied"],
-                    res["availability_req"],
-                    res["mean_t_success"],
-                    res["deadline_s"],
-                    res["deadline_ps"],
-                    res["setup_slack_s"],
-                    args.attempt_rate_hz,
-                    args.p_eg,
-                    args.coherence_time_s,
-                    args.p_bsm,
-                    args.key_bits_per_pair,
-                    "ok",
-                    "",
-                )
-            except Exception as e:  # noqa: BLE001
-                return (
-                    dist,
-                    eta,
-                    strat,
-                    seed,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "error",
-                    str(e),
-                )
-
         results: List[Tuple] = []
         if tasks:
             try:
@@ -235,7 +237,7 @@ def main():
                 print(f"WARNING: cpu_limit={cpu_limit:.2f} ({cpu_reason}); effective_workers={effective_workers}")
             print(f"Using pool_kind=process effective_workers={effective_workers} task_count={len(tasks)} chunksize=1")
             with ProcessPoolExecutor(max_workers=effective_workers) as ex:
-                future_map = {ex.submit(run_cell, t): t for t in tasks}
+                future_map = {ex.submit(run_cell, args, t): t for t in tasks}
                 for fut in as_completed(future_map):
                     row = fut.result()
                     writer.writerow(row)
@@ -245,25 +247,35 @@ def main():
         else:
             with raw_path.open() as f:
                 reader = csv.DictReader(f)
+                dedup = {}
                 for row in reader:
-                    if row.get("status", "ok") == "ok":
-                        results.append(
-                            (
-                                float(row["distance"]),
-                                float(row["eta"]),
-                                row["strategy"],
-                                int(row["seed"]),
-                                int(row["num_trials"]),
-                                int(row["satisfied"]),
-                                float(row["availability_req"]),
-                                float(row["mean_t_success"]),
-                                float(row["deadline_s"]),
-                                float(row["deadline_ps"]),
-                                float(row["setup_slack_s"]),
-                                "ok",
-                                "",
-                            )
-                        )
+                    if row.get("status", "ok") != "ok":
+                        continue
+                    key = (float(row["distance"]), float(row["eta"]), row["strategy"], int(row["seed"]))
+                    mean_t = row.get("mean_t_success", "")
+                    mean_t_val = float(mean_t) if mean_t != "" else float("nan")
+                    num_trials = int(row["num_trials"]) if row.get("num_trials", "") != "" else 0
+                    satisfied = int(row["satisfied"]) if row.get("satisfied", "") != "" else 0
+                    availability_req = float(row["availability_req"]) if row.get("availability_req", "") != "" else 0.0
+                    deadline_s = float(row["deadline_s"]) if row.get("deadline_s", "") != "" else float("nan")
+                    deadline_ps = float(row["deadline_ps"]) if row.get("deadline_ps", "") != "" else float("nan")
+                    setup_slack_s = float(row["setup_slack_s"]) if row.get("setup_slack_s", "") != "" else float("nan")
+                    dedup[key] = (
+                        key[0],
+                        key[1],
+                        key[2],
+                        key[3],
+                        num_trials,
+                        satisfied,
+                        availability_req,
+                        mean_t_val,
+                        deadline_s,
+                        deadline_ps,
+                        setup_slack_s,
+                        "ok",
+                        "",
+                    )
+                results.extend(dedup.values())
 
     agg_headers = [
         "distance",
