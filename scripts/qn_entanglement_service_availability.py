@@ -20,6 +20,7 @@ from scripts.qn_topologies import (
     nsfnet_edges,
     load_edge_distances_csv,
     load_distance_dataset,
+    build_topology_from_dist_map,
     subdivide_edges,
     expanded_nodes,
     shortest_path_edges,
@@ -101,6 +102,8 @@ def main():
         expanded_edges, mapping, virtual_nodes = subdivide_edges(dist_map, segment_length_km=args.segment_length_km)
         nodes_expanded = expanded_nodes(expanded_edges)
         topo = nsfnet_topology()
+        if args.edge_distance_csv:
+            topo = build_topology_from_dist_map(dist_map)
         upgrade_edges = set(pick_upgrade_edges(topo, args.upgrade_policy, args.upgrade_k))
     else:
         base_edges = [

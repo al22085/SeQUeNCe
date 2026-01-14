@@ -1,0 +1,19 @@
+{
+  "availability_mean": 0.0,
+  "key_bits_per_pair": 1.0,
+  "seeds": [
+    12
+  ],
+  "pair_mode": "fixed",
+  "src_nodes": "1",
+  "dst_nodes": "14",
+  "targets": {
+    "0.9": false,
+    "0.99": false,
+    "0.999": false
+  },
+  "distance_dataset_id": "sndlib_great_circle_heuristic",
+  "upgrade_edges": [],
+  "strategy": "BK",
+  "eta": 0.8
+}

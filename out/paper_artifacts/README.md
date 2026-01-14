@@ -17,19 +17,25 @@ Parameter matrix
 - study_transducer_availability: BK/DQT/EQT, eta=0.6/0.8/0.9, seeds=30, requests/seed=200, workers=20.
 - study_eta_sanity: DQT/EQT, eta=0.05/0.95, seeds=10, requests/seed=200, workers=20.
 - study_upgrade_k: BK/DQT/EQT (k=0) + EQT_UPGRADE (k=1,2,4,8), eta=0.6/0.8/0.9, seeds=30, requests/seed=200, workers=20.
+- study_topology_sweep: BK/EQT/EQT_UPGRADE (best k@eta=0.8), eta=0.8, seeds=30, requests/seed=200, workers=20.
 
 Commands
 - Batch runner: scripts/run_upgrade_k_batch.py (eta=0.6/0.8/0.9, seeds 0-30, workers=20).
+- Batch runner: scripts/run_topology_batch.py (eta=0.8, seeds 0-30, workers=20).
 - Availability: scripts/compute_availability.py.
 - Consolidation: scripts/build_paper_artifacts.py.
 - Plots: scripts/plot_paper_artifacts.py.
+
+Topology sweep
+- topologies: NSFNET13, TOP_0_SANET, TOP_103_GEANT.
 
 Raw data
 - upgrade-k raw archive: out/study_upgrade_k_raw.tar.gz
 - transducer availability raw CSVs: out/study_transducer_availability/raw
 - eta sanity raw CSVs: out/study_eta_sanity/raw
+- topology sweep raw CSVs: out/study_topology_sweep/raw
 
-Git commit: 4f469efbd40f5ff66dedd108d3e2536876751a30
+Git commit: 5698bd615ff77093bc2d4a6826e20982812706fd
 
 Key findings
 - eta=0.8 BK mean=0.0000 (95% CI 0.0000--0.0000).

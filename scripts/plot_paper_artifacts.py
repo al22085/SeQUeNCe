@@ -138,17 +138,81 @@ def plot_upgrade_k_sweep(df: pd.DataFrame, outdir: Path) -> list[Path]:
     return [png, pdf]
 
 
+def plot_topology_bar_eta08(df: pd.DataFrame, outdir: Path) -> list[Path]:
+    subset = df[(df["study"] == "study_topology_sweep") & (df["eta"] == 0.8)]
+    if subset.empty:
+        return []
+
+    topologies = sorted(subset["topology"].unique())
+    scenarios = [("BK", 0), ("EQT", 0), ("EQT_UPGRADE", None)]
+    data = {scenario: [] for scenario, _ in scenarios}
+    errs = {scenario: [] for scenario, _ in scenarios}
+
+    for topo in topologies:
+        topo_rows = subset[subset["topology"] == topo]
+        for scenario, k in scenarios:
+            if scenario == "EQT_UPGRADE":
+                rows = topo_rows[(topo_rows["scenario"] == scenario) & (topo_rows["k"] > 0)]
+                if rows.empty:
+                    data[scenario].append(0.0)
+                    errs[scenario].append((0.0, 0.0))
+                    continue
+                row = rows.loc[rows["mean_success_rate"].idxmax()]
+            else:
+                rows = topo_rows[(topo_rows["scenario"] == scenario) & (topo_rows["k"] == k)]
+                if rows.empty:
+                    data[scenario].append(0.0)
+                    errs[scenario].append((0.0, 0.0))
+                    continue
+                row = rows.iloc[0]
+            mean = float(row["mean_success_rate"])
+            data[scenario].append(mean)
+            errs[scenario].append((mean - float(row["ci95_low"]), float(row["ci95_high"]) - mean))
+
+    width = 0.25
+    x_vals = list(range(len(topologies)))
+    plt.figure(figsize=(max(7, len(topologies) * 1.2), 4))
+    colors = {"BK": "#4c78a8", "EQT": "#72b7b2", "EQT_UPGRADE": "#f58518"}
+    for i, (scenario, _) in enumerate(scenarios):
+        offsets = [x + (i - 1) * width for x in x_vals]
+        yerr = list(zip(*errs[scenario])) if errs[scenario] else None
+        plt.bar(
+            offsets,
+            data[scenario],
+            width=width,
+            color=colors.get(scenario, "#4c78a8"),
+            yerr=yerr,
+            capsize=3,
+            label=scenario,
+        )
+    plt.xticks(x_vals, topologies, rotation=30, ha="right")
+    plt.ylabel("Availability (success rate)")
+    plt.title("Availability at eta=0.8 across topologies")
+    plt.legend(fontsize=8, ncol=3)
+    plt.tight_layout()
+
+    png = outdir / "topology_bar_eta08.png"
+    pdf = outdir / "topology_bar_eta08.pdf"
+    plt.savefig(png, dpi=200)
+    plt.savefig(pdf)
+    plt.close()
+    return [png, pdf]
+
+
 def main() -> int:
     args = parse_args()
-    df = pd.read_csv(args.results)
-    df["eta"] = df["eta"].astype(float)
-    df["k"] = df["k"].astype(int)
-    df["mean_success_rate"] = df["mean_success_rate"].astype(float)
-    df["ci95_low"] = df["ci95_low"].astype(float)
-    df["ci95_high"] = df["ci95_high"].astype(float)
+    df_all = pd.read_csv(args.results)
+    df_all["eta"] = df_all["eta"].astype(float)
+    df_all["k"] = df_all["k"].astype(int)
+    df_all["mean_success_rate"] = df_all["mean_success_rate"].astype(float)
+    df_all["ci95_low"] = df_all["ci95_low"].astype(float)
+    df_all["ci95_high"] = df_all["ci95_high"].astype(float)
+    if "topology" not in df_all.columns:
+        df_all["topology"] = "nsfnet"
 
-    if args.study in set(df["study"]):
-        df = df[df["study"] == args.study].copy()
+    df = df_all
+    if args.study in set(df_all["study"]):
+        df = df_all[df_all["study"] == args.study].copy()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
@@ -156,6 +220,7 @@ def main() -> int:
     outputs += plot_bar_eta08(df, args.outdir)
     outputs += plot_eta_sweep(df, args.outdir)
     outputs += plot_upgrade_k_sweep(df, args.outdir)
+    outputs += plot_topology_bar_eta08(df_all, args.outdir)
 
     for path in outputs:
         print(f"Wrote {path}")
