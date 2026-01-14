@@ -242,8 +242,9 @@ def write_table_compact(agg: pd.DataFrame, path: Path) -> dict[str, float]:
     upgrade_rows = subset[(subset["scenario"] == "EQT_UPGRADE") & (subset["k"] > 0)]
     best_upgrade = None
     if not upgrade_rows.empty:
-        best_idx = upgrade_rows["mean_success_rate"].idxmax()
-        best_upgrade = upgrade_rows.loc[best_idx]
+        best_upgrade = (
+            upgrade_rows.sort_values(["mean_success_rate", "k"], ascending=[False, True]).iloc[0]
+        )
         rows.append((f"EQT_UPGRADE k={int(best_upgrade['k'])}", best_upgrade))
 
     lines = [
@@ -293,9 +294,12 @@ def write_macros(path: Path, values: dict[str, float]) -> None:
 
 def write_readme(path: Path, agg: pd.DataFrame, out_root: Path) -> None:
     key_findings = []
-    subset = agg[(agg["study"] == "study_upgrade_k") & (agg["eta"] == 0.8)]
+    subset = agg[
+        (agg["study"] == "study_upgrade_k") & (agg["eta"] == 0.8) & (agg["topology"] == "nsfnet")
+    ]
     if not subset.empty:
         bk = subset[(subset["scenario"] == "BK") & (subset["k"] == 0)]
+        eqt = subset[(subset["scenario"] == "EQT") & (subset["k"] == 0)]
         if not bk.empty:
             key_findings.append(
                 f"eta=0.8 BK mean={format_float(float(bk.iloc[0]['mean_success_rate']))} "
@@ -304,12 +308,15 @@ def write_readme(path: Path, agg: pd.DataFrame, out_root: Path) -> None:
             )
         upgrades = subset[(subset["scenario"] == "EQT_UPGRADE") & (subset["k"] > 0)]
         if not upgrades.empty:
-            best = upgrades.loc[upgrades["mean_success_rate"].idxmax()]
+            best = upgrades.sort_values(["mean_success_rate", "k"], ascending=[False, True]).iloc[0]
+            note = ""
+            if not eqt.empty and float(best["mean_success_rate"]) <= float(eqt.iloc[0]["mean_success_rate"]):
+                note = " (best among upgrade-k; may not improve over EQT)"
             key_findings.append(
                 f"eta=0.8 best EQT_UPGRADE k={int(best['k'])} mean="
                 f"{format_float(float(best['mean_success_rate']))} "
                 f"(95% CI {format_float(float(best['ci95_low']))}--"
-                f"{format_float(float(best['ci95_high']))})."
+                f"{format_float(float(best['ci95_high']))}).{note}"
             )
 
     raw_notes = []
@@ -437,6 +444,8 @@ def main() -> int:
     agg["std_success_rate"] = agg["std_success_rate"].fillna(0.0)
     agg["ci95_low"] = agg["mean_success_rate"] - 1.96 * agg["std_success_rate"] / agg["n_seeds"].pow(0.5)
     agg["ci95_high"] = agg["mean_success_rate"] + 1.96 * agg["std_success_rate"] / agg["n_seeds"].pow(0.5)
+    agg["ci95_low"] = agg["ci95_low"].clip(lower=0.0, upper=1.0)
+    agg["ci95_high"] = agg["ci95_high"].clip(lower=0.0, upper=1.0)
     agg.to_csv(artifacts_dir / "results_agg.csv", index=False)
 
     write_table_full(agg, artifacts_dir / "results_table_full.tex")

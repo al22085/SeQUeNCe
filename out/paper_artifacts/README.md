@@ -35,8 +35,8 @@ Raw data
 - eta sanity raw CSVs: out/study_eta_sanity/raw
 - topology sweep raw CSVs: out/study_topology_sweep/raw
 
-Git commit: 5698bd615ff77093bc2d4a6826e20982812706fd
+Git commit: 703e7caef96a04061b2d6efe48d7d9ff4c7a734d
 
 Key findings
 - eta=0.8 BK mean=0.0000 (95% CI 0.0000--0.0000).
-- eta=0.8 best EQT_UPGRADE k=1 mean=0.0000 (95% CI 0.0000--0.0000).
+- eta=0.8 best EQT_UPGRADE k=1 mean=0.0000 (95% CI 0.0000--0.0000). (best among upgrade-k; may not improve over EQT)

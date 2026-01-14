@@ -42,15 +42,30 @@ def label_for(row: pd.Series) -> str:
     return f"{row['scenario']} k={int(row['k'])}"
 
 
+def select_best_upgrade(df: pd.DataFrame, *, eta: float, topology: str) -> pd.Series | None:
+    subset = df[
+        (df["eta"] == eta)
+        & (df["scenario"] == "EQT_UPGRADE")
+        & (df["k"] > 0)
+        & (df["topology"] == topology)
+    ]
+    if subset.empty:
+        return None
+    subset = subset.sort_values(["mean_success_rate", "k"], ascending=[False, True])
+    return subset.iloc[0]
+
+
 def plot_bar_eta08(df: pd.DataFrame, outdir: Path) -> list[Path]:
-    subset = df[(df["eta"] == 0.8) & (df["k"] == 0) & (df["scenario"].isin(["BK", "DQT", "EQT"]))]
-    upgrades = df[(df["eta"] == 0.8) & (df["scenario"] == "EQT_UPGRADE") & (df["k"] > 0)]
+    subset = df[(df["eta"] == 0.8) & (df["k"] == 0) & (df["scenario"].isin(["BK", "EQT"]))]
+    if "topology" in df.columns:
+        subset = subset[subset["topology"] == "nsfnet"]
     rows = []
     if not subset.empty:
         rows.extend(subset.to_dict("records"))
-    if not upgrades.empty:
-        best = upgrades.loc[upgrades["mean_success_rate"].idxmax()].to_dict()
-        rows.append(best)
+    if "topology" in df.columns:
+        best_upgrade = select_best_upgrade(df, eta=0.8, topology="nsfnet")
+        if best_upgrade is not None:
+            rows.append(best_upgrade.to_dict())
 
     if not rows:
         return []
