@@ -1,0 +1,36 @@
+# Paper Artifacts
+
+Metric
+- Availability = deadline-based request success rate.
+- success = (served == 1) AND (t_done_s <= deadline_s).
+
+Raw to requests.csv mapping
+- t_start = arrival_s
+- deadline = deadline_s
+- t_finish = t_done_s (success only)
+
+Eta usage
+- eta passed via --eta to scripts/qn_entanglement_service_availability.py.
+- eta used in sequence/qn/strategy_params.py (edge_params_for_strategy) to compute p_eg.
+
+Parameter matrix
+- study_transducer_availability: BK/DQT/EQT, eta=0.6/0.8/0.9, seeds=30, requests/seed=200, workers=20.
+- study_eta_sanity: DQT/EQT, eta=0.05/0.95, seeds=10, requests/seed=200, workers=20.
+- study_upgrade_k: BK/DQT/EQT (k=0) + EQT_UPGRADE (k=1,2,4,8), eta=0.6/0.8/0.9, seeds=30, requests/seed=200, workers=20.
+
+Commands
+- Batch runner: scripts/run_upgrade_k_batch.py (eta=0.6/0.8/0.9, seeds 0-30, workers=20).
+- Availability: scripts/compute_availability.py.
+- Consolidation: scripts/build_paper_artifacts.py.
+- Plots: scripts/plot_paper_artifacts.py.
+
+Raw data
+- upgrade-k raw archive: out/study_upgrade_k_raw.tar.gz
+- transducer availability raw CSVs: out/study_transducer_availability/raw
+- eta sanity raw CSVs: out/study_eta_sanity/raw
+
+Git commit: 4f469efbd40f5ff66dedd108d3e2536876751a30
+
+Key findings
+- eta=0.8 BK mean=0.0000 (95% CI 0.0000--0.0000).
+- eta=0.8 best EQT_UPGRADE k=1 mean=0.0000 (95% CI 0.0000--0.0000).
