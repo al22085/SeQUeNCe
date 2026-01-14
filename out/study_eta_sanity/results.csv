@@ -1,0 +1,5 @@
+scenario,eta,n_seeds,n_requests_total,mean_success_rate,std_success_rate
+DQT,0.05,10,2000,0.028000,0.002582
+DQT,0.95,10,2000,0.028000,0.002582
+EQT,0.05,10,2000,0.028000,0.002582
+EQT,0.95,10,2000,0.028000,0.002582
