@@ -32,6 +32,11 @@ def parse_args() -> argparse.Namespace:
         default=Path("out/paper_artifacts/figures"),
         help="Output directory for figures.",
     )
+    parser.add_argument(
+        "--include-method-diagram",
+        action="store_true",
+        help="Also render the Fig.1 method diagram.",
+    )
     return parser.parse_args()
 
 
@@ -182,48 +187,75 @@ def plot_method_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
     return [png, pdf]
 
 
-def plot_main_result(df: pd.DataFrame, outdir: Path) -> list[Path]:
-    subset = df[(df["study"] == "study_transducer_availability") & (df["eta"] == 0.8)]
+def select_main_result_rows(df: pd.DataFrame, etas: list[float]) -> pd.DataFrame:
+    subset = df[df["study"] == "study_transducer_availability"].copy()
     if "topology" in df.columns:
-        subset = subset[subset["topology"] == "nsfnet"]
+        subset = subset[subset["topology"].str.lower() == "nsfnet"]
     subset = subset[subset["scenario"].isin(["BK", "EQT"])]
+    subset["eta"] = subset["eta"].round(2)
+    subset = subset[subset["eta"].isin(etas)]
 
     scenario_order = ["BK", "EQT"]
-    subset = subset.set_index("scenario").loc[scenario_order].reset_index()
+    expected = {(scenario, eta) for scenario in scenario_order for eta in etas}
+    present = set(zip(subset["scenario"], subset["eta"]))
+    missing = expected - present
+    if missing:
+        missing_text = ", ".join(sorted(f"{scenario}@{eta}" for scenario, eta in missing))
+        raise ValueError(f"Missing rows for main result eta sweep: {missing_text}.")
+    if subset.duplicated(subset=["scenario", "eta"]).any():
+        raise ValueError("Duplicate scenario/eta rows found for main result eta sweep.")
 
-    if subset.empty or len(subset) != len(scenario_order):
-        raise ValueError("Expected BK and EQT rows for eta=0.8 in study_transducer_availability.")
+    subset["scenario"] = pd.Categorical(subset["scenario"], categories=scenario_order, ordered=True)
+    subset = subset.sort_values(["scenario", "eta"]).reset_index(drop=True)
+    return subset
 
-    labels = subset["scenario"].tolist()
-    means = subset["mean_success_rate"].astype(float).tolist()
-    yerr_low = (subset["mean_success_rate"] - subset["ci95_low"]).astype(float).tolist()
-    yerr_high = (subset["ci95_high"] - subset["mean_success_rate"]).astype(float).tolist()
 
+def print_main_result_rows(subset: pd.DataFrame) -> None:
+    table = subset[["scenario", "eta", "mean_success_rate", "ci95_low", "ci95_high"]].copy()
+    print("Rows used for fig2_main_result_eta_sweep:")
+    print(table.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+
+
+def plot_main_result_eta_sweep(
+    subset: pd.DataFrame, outdir: Path, etas: list[float], has_topology: bool
+) -> list[Path]:
     fig, ax = plt.subplots(figsize=(4.2, 3.2))
     colors = {"BK": "#4c78a8", "EQT": "#f58518"}
-    ax.bar(
-        labels,
-        means,
-        color=[colors[label] for label in labels],
-        yerr=[yerr_low, yerr_high],
-        capsize=4,
-    )
+    markers = {"BK": "o", "EQT": "s"}
 
-    ymax = max(subset["ci95_high"].astype(float))
-    if ymax <= 0:
-        ymax = 0.05
-    else:
-        ymax = ymax * 1.15
+    for scenario in ["BK", "EQT"]:
+        rows = subset[subset["scenario"] == scenario].sort_values("eta")
+        x_vals = rows["eta"].astype(float).tolist()
+        y_vals = rows["mean_success_rate"].astype(float).tolist()
+        yerr_low = (rows["mean_success_rate"] - rows["ci95_low"]).astype(float).tolist()
+        yerr_high = (rows["ci95_high"] - rows["mean_success_rate"]).astype(float).tolist()
+        ax.errorbar(
+            x_vals,
+            y_vals,
+            yerr=[yerr_low, yerr_high],
+            marker=markers.get(scenario, "o"),
+            linestyle="-",
+            linewidth=1.2,
+            capsize=3,
+            color=colors.get(scenario, "#4c78a8"),
+            label=scenario,
+        )
+
+    ymax = float(subset["ci95_high"].max())
+    ymax = 0.05 if ymax <= 0 else ymax * 1.15
     ax.set_ylim(0, ymax)
+    ax.set_xticks(etas)
+    ax.set_xlabel("eta")
     ax.set_ylabel("Deadline success rate (availability)")
-    title = "Availability (eta=0.8, nsfnet)" if "topology" in df.columns else "Availability (eta=0.8)"
+    title = "Availability vs eta (nsfnet)" if has_topology else "Availability vs eta"
     ax.set_title(title)
+    ax.legend(frameon=False, fontsize=8)
     ax.set_axisbelow(True)
     ax.yaxis.grid(True, linestyle=":", linewidth=0.6, color="#b0b0b0")
     fig.tight_layout()
 
-    png = outdir / "fig2_main_result_eta08.png"
-    pdf = outdir / "fig2_main_result_eta08.pdf"
+    png = outdir / "fig2_main_result_eta_sweep.png"
+    pdf = outdir / "fig2_main_result_eta_sweep.pdf"
     fig.savefig(png, dpi=300)
     fig.savefig(pdf)
     plt.close(fig)
@@ -249,8 +281,16 @@ def main() -> None:
     configure_matplotlib(jp_font)
 
     df = pd.read_csv(results_path)
-    plot_method_diagram(outdir, jp_font)
-    plot_main_result(df, outdir)
+    etas = [0.6, 0.8, 0.9]
+    subset = select_main_result_rows(df, etas)
+    print_main_result_rows(subset)
+    if args.include_method_diagram:
+        plot_method_diagram(outdir, jp_font)
+    paths = plot_main_result_eta_sweep(
+        subset, outdir, etas, has_topology="topology" in df.columns
+    )
+    for path in paths:
+        print(f"Wrote {path} (exists: {path.exists()})")
 
 
 if __name__ == "__main__":
