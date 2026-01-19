@@ -28,6 +28,8 @@ Commands
 - Consolidation: scripts/build_paper_artifacts.py.
 - Plots: scripts/plot_paper_artifacts.py.
 - Plot: scripts/plot_eta_threshold.py.
+- Summary figures (Fig.1/Fig.2):
+  - .venv/bin/python scripts/plot_summary_figures.py --include-architecture-diagram --results out/paper_artifacts/results_eta_threshold.csv --outdir out/paper_artifacts/figures
 - Strategy params: scripts/dump_strategy_params.py (writes out/paper_artifacts/dump_strategy_params.csv).
 
 Topology sweep

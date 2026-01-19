@@ -47,10 +47,10 @@ def parse_args() -> argparse.Namespace:
 
 def pick_japanese_font() -> str | None:
     candidates = [
-        "IPAexGothic",
-        "IPAGothic",
         "Noto Sans CJK JP",
         "Noto Sans JP",
+        "IPAexGothic",
+        "IPAGothic",
         "TakaoGothic",
         "Yu Gothic",
         "MS Gothic",
@@ -69,12 +69,12 @@ def configure_matplotlib(jp_font: str | None) -> None:
     plt.rcParams.update(
         {
             "font.family": font_family,
-            "font.size": 11,
-            "axes.titlesize": 12,
-            "axes.labelsize": 11,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 10,
+            "font.size": 12,
+            "axes.titlesize": 13,
+            "axes.labelsize": 12,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+            "legend.fontsize": 11,
             "axes.linewidth": 1.0,
             "lines.linewidth": 1.6,
             "lines.markersize": 6,
@@ -228,37 +228,6 @@ def plot_flow_diagram(outdir: Path, jp_font: str | None, stem: str) -> list[Path
     for start, end in zip(boxes, boxes[1:]):
         arrow_between(ax, start, end)
 
-    legend_y = 0.92
-    legend_box_w = 0.12
-    legend_box_h = 0.05
-    legend_gap = 0.02
-    legend_x = 0.05
-    legend_items = [
-        ("Added/modified", line_added),
-        ("Existing SeQUeNCe", line_existing),
-    ]
-    for i, (label, linestyle) in enumerate(legend_items):
-        lx = legend_x + i * (legend_box_w + 0.33 + legend_gap)
-        patch = FancyBboxPatch(
-            (lx, legend_y),
-            legend_box_w,
-            legend_box_h,
-            boxstyle="round,pad=0.01,rounding_size=0.01",
-            linewidth=1.2,
-            edgecolor="#1f2937",
-            facecolor="#ffffff",
-            linestyle=linestyle,
-        )
-        ax.add_patch(patch)
-        ax.text(
-            lx + legend_box_w + 0.02,
-            legend_y + legend_box_h / 2.0,
-            label,
-            ha="left",
-            va="center",
-            fontsize=9,
-        )
-
     fig.tight_layout(pad=0.2)
     png = outdir / f"{stem}.png"
     pdf = outdir / f"{stem}.pdf"
@@ -268,12 +237,201 @@ def plot_flow_diagram(outdir: Path, jp_font: str | None, stem: str) -> list[Path
     return [png, pdf]
 
 
-def plot_method_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
-    return plot_flow_diagram(outdir, jp_font, "fig1_sequence_extension")
+def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    title = "（a）SeQUeNCe拡張アーキテクチャ"
+    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=12, weight="bold")
+
+    layer_x = 0.05
+    layer_w = 0.9
+    layer_h = 0.2
+    layer_gap = 0.035
+    title_x = layer_x + 0.02
+    inner_x = layer_x + 0.2
+    inner_w = 0.7
+    module_h = 0.11
+
+    layers = [
+        {
+            "title": "アプリ層 (Application)",
+            "modules": [("QKD要求生成\n（締切）", True)],
+        },
+        {
+            "title": "制御・プロトコル層\n(Control/Protocol)",
+            "modules": [
+                ("戦略選択\n(BK/EQT)", True),
+                ("テレポート経路", True),
+                ("トランスデューサ\nリンク", True),
+            ],
+        },
+        {
+            "title": "シミュレータ・コア\n(Simulator)",
+            "modules": [
+                ("イベント\nスケジューラ", False),
+                ("エンタングルメント\n資源", False),
+            ],
+        },
+        {
+            "title": "出力・評価\n(Output/Eval)",
+            "modules": [
+                ("要求ログ出力", True),
+                ("requests.csv\n正規化", True),
+                ("可用性集計", True),
+            ],
+        },
+    ]
+
+    for idx, layer in enumerate(layers):
+        y = 1.0 - (idx + 1) * layer_h - idx * layer_gap - 0.02
+        bg = FancyBboxPatch(
+            (layer_x, y),
+            layer_w,
+            layer_h,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=0.8,
+            edgecolor="#9ca3af",
+            facecolor="#f8fafc",
+        )
+        ax.add_patch(bg)
+        ax.text(title_x, y + layer_h - 0.04, layer["title"], ha="left", va="top", fontsize=10)
+
+        modules = layer["modules"]
+        n = len(modules)
+        gap = 0.02
+        module_w = (inner_w - gap * (n - 1)) / n
+        module_y = y + (layer_h - module_h) / 2.0
+        for j, (label, is_added) in enumerate(modules):
+            mx = inner_x + j * (module_w + gap)
+            label_text = f"{label}\n（追加）" if is_added else label
+            draw_box(
+                ax,
+                mx,
+                module_y,
+                module_w,
+                module_h,
+                label_text,
+                text_kwargs={"fontsize": 9},
+                facecolor="#ffffff",
+                edgecolor="#111827",
+                linestyle=(0, (4, 2)) if is_added else "solid",
+            )
+
+    legend_y = 0.02
+    legend_items = [
+        ("既存", "solid"),
+        ("追加", (0, (4, 2))),
+    ]
+    legend_x = 0.05
+    for idx, (label, linestyle) in enumerate(legend_items):
+        lx = legend_x + idx * 0.22
+        patch = FancyBboxPatch(
+            (lx, legend_y),
+            0.12,
+            0.05,
+            boxstyle="round,pad=0.01,rounding_size=0.01",
+            linewidth=1.2,
+            edgecolor="#111827",
+            facecolor="#ffffff",
+            linestyle=linestyle,
+        )
+        ax.add_patch(patch)
+        ax.text(lx + 0.14, legend_y + 0.025, label, ha="left", va="center", fontsize=9)
+
+
+def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    title = "（b）評価ワークフロー（データフロー）"
+    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=12, weight="bold")
+
+    labels_jp = [
+        "パラメータ設定\n(トポロジ, η,\nシード, 要求数)",
+        "qn_entanglement\n_service_availability.py\n実行",
+        "要求ログ\n(arrival, deadline,\nserved, t_done)",
+        "requests.csvへ\n正規化",
+        "compute_availability.py\n→ per-seed summary",
+        "集計 → results_eta_threshold.csv\n+ Fig.2",
+    ]
+    labels_en = [
+        "Parameter sweep\n(topology, eta,\nseeds, requests)",
+        "Run qn_entanglement\n_service_availability.py",
+        "Raw per-request CSV\n(arrival, deadline,\nserved, t_done)",
+        "Normalize to\nrequests.csv",
+        "compute_availability.py\n→ per-seed summary",
+        "Aggregate → results_eta_threshold.csv\n+ Fig.2",
+    ]
+    labels = labels_jp if jp_font else labels_en
+
+    steps = [{"label": labels[i], "is_added": True} for i in range(6)]
+    width = 0.28
+    height = 0.2
+    top_y = 0.56
+    bottom_y = 0.16
+    x_positions = [0.05, 0.36, 0.67]
+    boxes = []
+
+    for idx, step in enumerate(steps[:3]):
+        label = f"({idx + 1}) {step['label']}"
+        boxes.append(
+            draw_box(
+                ax,
+                x_positions[idx],
+                top_y,
+                width,
+                height,
+                label,
+                text_kwargs={"fontsize": 9},
+                facecolor="#ffffff",
+                edgecolor="#111827",
+                linestyle="solid",
+            )
+        )
+    for idx, step in enumerate(steps[3:], start=3):
+        label = f"({idx + 1}) {step['label']}"
+        boxes.append(
+            draw_box(
+                ax,
+                x_positions[2 - (idx - 3)],
+                bottom_y,
+                width,
+                height,
+                label,
+                text_kwargs={"fontsize": 9},
+                facecolor="#ffffff",
+                edgecolor="#111827",
+                linestyle="solid",
+            )
+        )
+
+    for start, end in zip(boxes, boxes[1:]):
+        arrow_between(ax, start, end)
 
 
 def plot_architecture_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
-    return plot_flow_diagram(outdir, jp_font, "fig1_sequence_architecture")
+    fig = plt.figure(figsize=(4.2, 6.2))
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.1, 1.0], hspace=0.08)
+    ax_top = fig.add_subplot(gs[0])
+    ax_bottom = fig.add_subplot(gs[1])
+
+    draw_architecture_panel(ax_top, jp_font)
+    draw_workflow_panel(ax_bottom, jp_font)
+
+    fig.tight_layout(pad=0.2)
+    png = outdir / "fig1_sequence_architecture.png"
+    pdf = outdir / "fig1_sequence_architecture.pdf"
+    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+    return [png, pdf]
+
+
+def plot_method_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
+    return plot_flow_diagram(outdir, jp_font, "fig1_sequence_extension")
 
 
 def select_main_result_rows(df: pd.DataFrame, etas: list[float]) -> pd.DataFrame:
@@ -379,28 +537,31 @@ def compute_eta_thresholds(subset: pd.DataFrame) -> tuple[float | None, float | 
 
 
 def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
-    fig, ax = plt.subplots(figsize=(4.0, 3.0))
+    fig, ax = plt.subplots(figsize=(4.2, 3.0))
     colors = {"BK": "#1f77b4", "EQT": "#d62728"}
     markers = {"BK": "o", "EQT": "s"}
 
-    etas = sorted(subset["eta"].unique())
     for scenario in ["BK", "EQT"]:
         rows = subset[subset["scenario"] == scenario].sort_values("eta")
         x_vals = rows["eta"].astype(float).tolist()
-        y_vals = rows["mean_success_rate"].astype(float).tolist()
-        yerr_low = (rows["mean_success_rate"] - rows["ci95_low"]).astype(float).tolist()
-        yerr_high = (rows["ci95_high"] - rows["mean_success_rate"]).astype(float).tolist()
-        ax.errorbar(
+        y_mean = rows["mean_success_rate"].astype(float).tolist()
+        y_low = rows["ci95_low"].astype(float).tolist()
+        y_high = rows["ci95_high"].astype(float).tolist()
+        ax.fill_between(
             x_vals,
-            y_vals,
-            yerr=[yerr_low, yerr_high],
+            y_low,
+            y_high,
+            color=colors.get(scenario, "#1f77b4"),
+            alpha=0.18,
+            linewidth=0,
+        )
+        ax.plot(
+            x_vals,
+            y_mean,
             marker=markers.get(scenario, "o"),
             linestyle="-",
-            linewidth=1.8,
-            capsize=4,
-            capthick=1.2,
-            elinewidth=1.2,
-            color=colors.get(scenario, "#4c78a8"),
+            linewidth=2.0,
+            color=colors.get(scenario, "#1f77b4"),
             label=scenario,
         )
 
@@ -416,42 +577,51 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
             rotation=90,
             va="top",
             ha="right",
-            fontsize=9,
+            fontsize=10,
             transform=ax.get_xaxis_transform(),
         )
 
+    tick_vals = [1e-5, 1e-3, 1e-2, 0.03, 0.1, 0.3, 0.5, 0.8]
+    tick_labels = {
+        1e-5: "1e-5",
+        1e-3: "1e-3",
+        1e-2: "1e-2",
+        0.03: "0.03",
+        0.1: "0.1",
+        0.3: "0.3",
+        0.5: "0.5",
+        0.8: "0.8",
+    }
+
     ymax = float(subset["ci95_high"].max())
-    ymax = min(1.0, ymax * 1.35 if ymax > 0 else 1.0)
+    if ymax <= 0:
+        ymax = 0.05
+    else:
+        ymax = min(1.0, ymax * 1.4)
+
+    ax.set_xscale("log")
+    ax.set_xlim(min(tick_vals), max(tick_vals))
+    ax.set_xticks(tick_vals)
+    ax.set_xticklabels([tick_labels.get(val, f"{val:g}") for val in tick_vals])
     ax.set_ylim(0, ymax)
-    ax.set_xlim(min(etas) * 0.95, max(etas) * 1.05)
-    ax.set_xticks(etas)
-    ax.set_xticklabels([f"{eta:.3g}" for eta in etas], rotation=45, ha="right")
     ax.set_xlabel("Transducer efficiency η")
     ax.set_ylabel("Availability (deadline success rate)")
     ax.legend(frameon=False, ncol=2, loc="upper left")
     ax.set_axisbelow(True)
-    ax.yaxis.grid(True, linestyle=":", linewidth=0.7, color="#b0b0b0")
+    ax.yaxis.grid(True, linestyle=":", linewidth=0.8, color="#b0b0b0")
+    ax.xaxis.grid(False)
 
-    for scenario, offset in [("BK", -18), ("EQT", 12)]:
-        rows = subset[subset["scenario"] == scenario].sort_values("eta")
-        if rows.empty:
-            continue
-        row = rows.iloc[-1]
-        label = (
-            f"{scenario}: {row['mean_success_rate']:.4f}\n"
-            f"[{row['ci95_low']:.4f}, {row['ci95_high']:.4f}]"
-        )
-        ax.annotate(
-            label,
-            xy=(row["eta"], row["mean_success_rate"]),
-            xytext=(6, offset),
-            textcoords="offset points",
-            ha="left",
-            va="center",
-            fontsize=9,
-            color=colors.get(scenario, "#1f77b4"),
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85),
-        )
+    ax.axvline(0.30, color="#374151", linestyle=":", linewidth=1.2)
+    ax.text(
+        0.30,
+        0.92,
+        "実測例 (≈0.30)",
+        rotation=90,
+        va="top",
+        ha="right",
+        fontsize=10,
+        transform=ax.get_xaxis_transform(),
+    )
 
     fig.tight_layout(pad=0.2)
 
