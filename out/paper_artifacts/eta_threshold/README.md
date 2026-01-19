@@ -48,3 +48,4 @@ Eta sensitivity note
 
 Run command (example)
 - .venv/bin/python scripts/run_eta_threshold_batch.py --eta 0.30 --seed-start 0 --seed-end 30 --workers 20 --requests-per-seed 200 --resume
+- Diagnostics: .venv/bin/python scripts/diagnose_eta_threshold.py --raw-root out/paper_artifacts/eta_threshold/raw --outdir out/paper_artifacts/eta_threshold/diagnostics
