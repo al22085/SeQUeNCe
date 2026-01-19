@@ -71,13 +71,13 @@ def configure_matplotlib(jp_font: str | None) -> None:
             "font.family": font_family,
             "font.size": 14,
             "axes.titlesize": 15,
-            "axes.labelsize": 14,
+            "axes.labelsize": 15,
             "xtick.labelsize": 13,
             "ytick.labelsize": 13,
             "legend.fontsize": 13,
             "axes.linewidth": 1.0,
-            "lines.linewidth": 2.0,
-            "lines.markersize": 7,
+            "lines.linewidth": 2.6,
+            "lines.markersize": 8,
             "axes.unicode_minus": False,
         }
     )
@@ -255,32 +255,18 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
     module_h = 0.11
 
     layers = [
+        {"title": "アプリ層", "modules": [("QKD要求生成", True)]},
         {
-            "title": "アプリ層（Application）",
-            "modules": [("QKD要求生成", True)],
+            "title": "制御・プロトコル層",
+            "modules": [("戦略選択", True), ("テレポート\n経路", True), ("トランス\nデューサ", True)],
         },
         {
-            "title": "制御・プロトコル層\n（Control/Protocol）",
-            "modules": [
-                ("戦略選択", True),
-                ("テレポート\n経路", True),
-                ("トランス\nデューサ", True),
-            ],
+            "title": "シミュレータ・コア",
+            "modules": [("イベント\nスケジューラ", False), ("エンタングルメント\n資源", False)],
         },
         {
-            "title": "シミュレータ・コア\n（Simulator）",
-            "modules": [
-                ("イベント\nスケジューラ", False),
-                ("エンタングルメント\n資源", False),
-            ],
-        },
-        {
-            "title": "出力・評価\n（Output/Eval）",
-            "modules": [
-                ("ログ出力", True),
-                ("CSV正規化", True),
-                ("可用性集計", True),
-            ],
+            "title": "出力・評価",
+            "modules": [("ログ出力", True), ("CSV正規化", True), ("可用性集計", True)],
         },
     ]
 
@@ -305,25 +291,21 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
         module_y = y + (layer_h - module_h) / 2.0
         for j, (label, is_added) in enumerate(modules):
             mx = inner_x + j * (module_w + gap)
-            label_text = f"{label}\n（追加）" if is_added else label
             draw_box(
                 ax,
                 mx,
                 module_y,
                 module_w,
                 module_h,
-                label_text,
-                text_kwargs={"fontsize": 14},
+                label,
+                text_kwargs={"fontsize": 12},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle=(0, (4, 2)) if is_added else "solid",
             )
 
     legend_y = 0.02
-    legend_items = [
-        ("既存", "solid"),
-        ("追加", (0, (4, 2))),
-    ]
+    legend_items = [("既存", "solid"), ("追加", (0, (4, 2)))]
     legend_x = 0.05
     for idx, (label, linestyle) in enumerate(legend_items):
         lx = legend_x + idx * 0.22
@@ -350,20 +332,20 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
     ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=14, weight="bold")
 
     labels_jp = [
-        "パラメータ設定\n(トポロジ, η,\nシード, 要求数)",
-        "qn_entanglement\n_service_availability.py\n実行",
-        "要求ログCSV\n(arrival, deadline,\nserved, t_done)",
-        "requests.csvへ\n正規化",
-        "compute_availability.py\n→ seed別summary",
-        "集計 → results_eta_threshold.csv\n+ Fig.2",
+        "パラメータ設定",
+        "シミュレーション実行",
+        "生ログ\n(raw.csv)",
+        "正規化\n(requests.csv)",
+        "可用性集計\n(summary.csv→results_eta_threshold.csv)",
+        "可視化\n(Fig.2)",
     ]
     labels_en = [
-        "Parameter sweep\n(topology, eta,\nseeds, requests)",
-        "Run qn_entanglement\n_service_availability.py",
-        "Raw per-request CSV\n(arrival, deadline,\nserved, t_done)",
-        "Normalize to\nrequests.csv",
-        "compute_availability.py\n→ per-seed summary",
-        "Aggregate → results_eta_threshold.csv\n+ Fig.2",
+        "Parameter setup",
+        "Simulation run",
+        "Raw log\n(raw.csv)",
+        "Normalize\n(requests.csv)",
+        "Availability\n(summary.csv→results_eta_threshold.csv)",
+        "Plot\n(Fig.2)",
     ]
     labels = labels_jp if jp_font else labels_en
 
@@ -385,7 +367,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
                 width,
                 height,
                 label,
-                text_kwargs={"fontsize": 14},
+                text_kwargs={"fontsize": 12},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle="solid",
@@ -401,7 +383,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
                 width,
                 height,
                 label,
-                text_kwargs={"fontsize": 14},
+                text_kwargs={"fontsize": 12},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle="solid",
@@ -413,7 +395,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
 
 
 def plot_architecture_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
-    fig = plt.figure(figsize=(4.6, 6.6))
+    fig = plt.figure(figsize=(4.8, 6.4))
     gs = fig.add_gridspec(2, 1, height_ratios=[1.1, 1.0], hspace=0.08)
     ax_top = fig.add_subplot(gs[0])
     ax_bottom = fig.add_subplot(gs[1])
@@ -421,11 +403,11 @@ def plot_architecture_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
     draw_architecture_panel(ax_top, jp_font)
     draw_workflow_panel(ax_bottom, jp_font)
 
-    fig.tight_layout(pad=0.2)
+    fig.subplots_adjust(left=0.04, right=0.98, top=0.98, bottom=0.04, hspace=0.1)
     png = outdir / "fig1_sequence_architecture.png"
     pdf = outdir / "fig1_sequence_architecture.pdf"
-    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(png, dpi=300)
+    fig.savefig(pdf)
     plt.close(fig)
     return [png, pdf]
 
@@ -536,8 +518,8 @@ def compute_eta_thresholds(subset: pd.DataFrame) -> tuple[float | None, float | 
     return eta_equal, eta_sig
 
 
-def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
-    fig, ax = plt.subplots(figsize=(4.2, 3.0))
+def plot_eta_threshold(subset: pd.DataFrame, outdir: Path, jp_font: str | None) -> list[Path]:
+    fig, ax = plt.subplots(figsize=(4.6, 3.2))
     colors = {"BK": "#1f77b4", "EQT": "#d62728"}
     markers = {"BK": "o", "EQT": "s"}
 
@@ -552,7 +534,7 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
             y_low,
             y_high,
             color=colors.get(scenario, "#1f77b4"),
-            alpha=0.18,
+            alpha=0.22,
             linewidth=0,
         )
         ax.plot(
@@ -560,7 +542,7 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
             y_mean,
             marker=markers.get(scenario, "o"),
             linestyle="-",
-            linewidth=2.0,
+            linewidth=2.6,
             color=colors.get(scenario, "#1f77b4"),
             label=scenario,
         )
@@ -590,30 +572,26 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
             fontsize=12,
             transform=ax.get_xaxis_transform(),
         )
-    candidate_ticks = [0.01, 0.03, 0.05, 0.1, 0.15, 0.3, 0.5, 0.8]
+    candidate_ticks = [0.01, 0.03, 0.10, 0.30, 0.80]
     etas = sorted(subset["eta"].unique())
     measured_eta = 0.30
     if min(etas) <= measured_eta <= max(etas):
-        ax.axvline(measured_eta, color="#6b7280", linestyle="-.", linewidth=1.2)
+        ax.axvline(measured_eta, color="#6b7280", linestyle="-.", linewidth=1.3)
         ax.text(
             measured_eta,
-            0.02,
-            "実測例\n(≈0.30)",
+            0.95,
+            "experimental anchor (~0.30)",
             rotation=90,
-            va="bottom",
+            va="top",
             ha="right",
             fontsize=12,
             transform=ax.get_xaxis_transform(),
         )
-    tick_vals = [
-        val
-        for val in candidate_ticks
-        if min(etas) <= val <= max(etas) and any(abs(val - eta) < 1e-9 for eta in etas)
-    ]
+    tick_vals = [val for val in candidate_ticks if min(etas) <= val <= max(etas)]
     if len(tick_vals) < 3:
-        step = max(1, len(etas) // 6)
+        step = max(1, len(etas) // 5)
         tick_vals = etas[::step]
-    tick_labels = {val: f"{val:g}" for val in tick_vals}
+    tick_labels = {val: f"{val:.2f}" for val in tick_vals}
 
     ymax = float(subset["ci95_high"].max())
     if ymax <= 0:
@@ -626,19 +604,23 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
     ax.set_xticks(tick_vals)
     ax.set_xticklabels([tick_labels.get(val, f"{val:g}") for val in tick_vals])
     ax.set_ylim(0, ymax)
-    ax.set_xlabel("Transducer efficiency η")
-    ax.set_ylabel("Availability (deadline success rate)")
+    if jp_font:
+        ax.set_xlabel("変換効率 η")
+        ax.set_ylabel("可用性（締切成功率）")
+    else:
+        ax.set_xlabel("Transducer efficiency η")
+        ax.set_ylabel("Availability (deadline success rate)")
     ax.legend(frameon=False, ncol=2, loc="upper left")
     ax.set_axisbelow(True)
     ax.yaxis.grid(True, linestyle=":", linewidth=0.9, color="#b0b0b0")
     ax.xaxis.grid(True, linestyle=":", linewidth=0.6, color="#e5e7eb")
-
-    fig.tight_layout(pad=0.2)
+    ax.tick_params(axis="both", labelsize=13)
+    fig.subplots_adjust(left=0.2, right=0.98, top=0.97, bottom=0.22)
 
     png = outdir / "fig2_eta_threshold.png"
     pdf = outdir / "fig2_eta_threshold.pdf"
-    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(png, dpi=300)
+    fig.savefig(pdf)
     plt.close(fig)
     return [png, pdf]
 
@@ -664,7 +646,7 @@ def main() -> None:
         plot_architecture_diagram(outdir, jp_font)
     if args.include_method_diagram:
         plot_method_diagram(outdir, jp_font)
-    paths = plot_eta_threshold(subset, outdir)
+    paths = plot_eta_threshold(subset, outdir, jp_font)
     for path in paths:
         print(f"Wrote {path} (exists: {path.exists()})")
 
