@@ -1,16 +1,34 @@
 {
   "etas": [
-    0.00001,
-    0.00003,
-    0.0001,
-    0.0003,
-    0.001,
-    0.003,
-    0.01,
     0.03,
+    0.05,
+    0.087,
     0.1,
+    0.15,
+    0.2,
     0.3,
+    0.4,
     0.5,
-    0.8
-  ]
+    0.6,
+    0.8,
+    0.95
+  ],
+  "bk_eta": 0.8,
+  "measured_eta": 0.087,
+  "baseline": {
+    "topology": "chain",
+    "pair_mode": "fixed",
+    "src_node": "A",
+    "dst_node": "B",
+    "horizon_s": 0.1,
+    "tau_s": 0.05,
+    "lambda_req": null,
+    "otp_data_rate_bps": 1000,
+    "otp_session_duration_s": 0.01,
+    "otp_directions": 2,
+    "distance_dataset_id": "sndlib_great_circle_heuristic",
+    "edge_distance_csv": null,
+    "segment_length_km": 50.0,
+    "key_bits_per_pair": 1.0
+  }
 }

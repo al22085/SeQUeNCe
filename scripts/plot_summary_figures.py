@@ -23,8 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results",
         type=Path,
-        default=Path("out/paper_artifacts/results_agg.csv"),
-        help="Path to results_agg.csv (falls back to results_master.csv if missing).",
+        default=Path("out/paper_artifacts/results_eta_threshold.csv"),
+        help="Path to results_eta_threshold.csv.",
     )
     parser.add_argument(
         "--outdir",
@@ -33,9 +33,14 @@ def parse_args() -> argparse.Namespace:
         help="Output directory for figures.",
     )
     parser.add_argument(
+        "--include-architecture-diagram",
+        action="store_true",
+        help="Render the Fig.1 architecture diagram.",
+    )
+    parser.add_argument(
         "--include-method-diagram",
         action="store_true",
-        help="Also render the Fig.1 method diagram.",
+        help="Render the legacy Fig.1 method diagram.",
     )
     return parser.parse_args()
 
@@ -187,6 +192,110 @@ def plot_method_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
     return [png, pdf]
 
 
+def plot_architecture_diagram(outdir: Path) -> list[Path]:
+    fig, ax = plt.subplots(figsize=(4.6, 3.4))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    layer_x = 0.05
+    layer_w = 0.9
+    layer_h = 0.18
+    layer_gap = 0.04
+    title_x = layer_x + 0.02
+    inner_x = layer_x + 0.18
+    inner_w = 0.75
+    module_h = 0.1
+
+    base_fc = "#e5e7eb"
+    base_ec = "#4b5563"
+    added_fc = "#fff4e6"
+    added_ec = "#d97706"
+
+    layers = [
+        {
+            "title": "Application layer",
+            "modules": [("QKD request generator\n(deadlines)", True)],
+        },
+        {
+            "title": "Protocol/Control layer",
+            "modules": [
+                ("Strategy selection\n(BK vs EQT)", True),
+                ("Teleportation routing", True),
+                ("Transducer link model", True),
+            ],
+        },
+        {
+            "title": "Simulator core",
+            "modules": [
+                ("Event scheduler", False),
+                ("Entanglement resources", False),
+            ],
+        },
+        {
+            "title": "Output/Evaluation",
+            "modules": [
+                ("Per-request logs", True),
+                ("Normalize -> requests.csv", True),
+                ("Availability aggregation", True),
+            ],
+        },
+    ]
+
+    for idx, layer in enumerate(layers):
+        y = 1.0 - (idx + 1) * layer_h - idx * layer_gap - 0.02
+        bg = FancyBboxPatch(
+            (layer_x, y),
+            layer_w,
+            layer_h,
+            boxstyle="round,pad=0.01,rounding_size=0.02",
+            linewidth=0.8,
+            edgecolor="#9ca3af",
+            facecolor="#f9fafb",
+        )
+        ax.add_patch(bg)
+        ax.text(title_x, y + layer_h - 0.05, layer["title"], ha="left", va="top", fontsize=8)
+
+        modules = layer["modules"]
+        n = len(modules)
+        gap = 0.02
+        module_w = (inner_w - gap * (n - 1)) / n
+        module_y = y + (layer_h - module_h) / 2.0
+        for j, (label, is_added) in enumerate(modules):
+            mx = inner_x + j * (module_w + gap)
+            draw_box(
+                ax,
+                mx,
+                module_y,
+                module_w,
+                module_h,
+                label,
+                text_kwargs={"fontsize": 7},
+                facecolor=added_fc if is_added else base_fc,
+                edgecolor=added_ec if is_added else base_ec,
+            )
+
+    legend_box = FancyBboxPatch(
+        (0.72, 0.94),
+        0.22,
+        0.04,
+        boxstyle="round,pad=0.01,rounding_size=0.01",
+        linewidth=0.8,
+        edgecolor=added_ec,
+        facecolor=added_fc,
+    )
+    ax.add_patch(legend_box)
+    ax.text(0.83, 0.96, "Added/modified", ha="center", va="center", fontsize=7)
+
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02)
+    png = outdir / "fig1_sequence_architecture.png"
+    pdf = outdir / "fig1_sequence_architecture.pdf"
+    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+    return [png, pdf]
+
+
 def select_main_result_rows(df: pd.DataFrame, etas: list[float]) -> pd.DataFrame:
     subset = df[df["study"] == "study_transducer_availability"].copy()
     if "topology" in df.columns:
@@ -262,13 +371,87 @@ def plot_main_result_eta_sweep(
     return [png, pdf]
 
 
+def prepare_eta_threshold_rows(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"scenario", "eta", "mean_success_rate", "ci95_low", "ci95_high"}
+    missing = required - set(df.columns)
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise ValueError(f"Missing columns in results: {missing_list}")
+    subset = df[df["scenario"].isin(["BK", "EQT"])].copy()
+    subset["eta"] = subset["eta"].astype(float)
+    subset = subset.sort_values(["scenario", "eta"]).reset_index(drop=True)
+    return subset
+
+
+def compute_eta_thresholds(subset: pd.DataFrame) -> tuple[float | None, float | None]:
+    bk = subset[subset["scenario"] == "BK"].set_index("eta")
+    eqt = subset[subset["scenario"] == "EQT"].set_index("eta")
+    eta_equal = None
+    eta_sig = None
+    for eta in sorted(subset["eta"].unique()):
+        if eta not in bk.index or eta not in eqt.index:
+            continue
+        if eta_equal is None and eqt.loc[eta, "mean_success_rate"] >= bk.loc[eta, "mean_success_rate"]:
+            eta_equal = eta
+        if eta_sig is None and eqt.loc[eta, "ci95_low"] >= bk.loc[eta, "ci95_high"]:
+            eta_sig = eta
+    return eta_equal, eta_sig
+
+
+def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
+    fig, ax = plt.subplots(figsize=(4.2, 3.2))
+    colors = {"BK": "#4c78a8", "EQT": "#f58518"}
+    markers = {"BK": "o", "EQT": "s"}
+
+    etas = sorted(subset["eta"].unique())
+    for scenario in ["BK", "EQT"]:
+        rows = subset[subset["scenario"] == scenario].sort_values("eta")
+        x_vals = rows["eta"].astype(float).tolist()
+        y_vals = rows["mean_success_rate"].astype(float).tolist()
+        yerr_low = (rows["mean_success_rate"] - rows["ci95_low"]).astype(float).tolist()
+        yerr_high = (rows["ci95_high"] - rows["mean_success_rate"]).astype(float).tolist()
+        ax.errorbar(
+            x_vals,
+            y_vals,
+            yerr=[yerr_low, yerr_high],
+            marker=markers.get(scenario, "o"),
+            linestyle="-",
+            linewidth=1.3,
+            capsize=3,
+            color=colors.get(scenario, "#4c78a8"),
+            label=scenario,
+        )
+
+    eta_equal, eta_sig = compute_eta_thresholds(subset)
+    eta_star = eta_sig if eta_sig is not None else eta_equal
+    if eta_star is not None:
+        ax.axvline(eta_star, color="#333333", linestyle="--", linewidth=1.0)
+        label = "eta* (sig)" if eta_sig is not None else "eta* (mean)"
+        ax.text(eta_star, 0.98, label, rotation=90, va="top", ha="right", fontsize=7)
+
+    ax.set_ylim(0, 1.0)
+    ax.set_xlim(min(etas) * 0.95, max(etas) * 1.05)
+    ax.set_xticks(etas)
+    ax.set_xticklabels([f"{eta:.3g}" for eta in etas], rotation=45, ha="right")
+    ax.set_xlabel("Transducer efficiency eta")
+    ax.set_ylabel("Availability (deadline success rate)")
+    ax.legend(frameon=False, fontsize=8, ncol=2, loc="upper left")
+    ax.set_axisbelow(True)
+    ax.yaxis.grid(True, linestyle=":", linewidth=0.6, color="#b0b0b0")
+    fig.tight_layout()
+
+    png = outdir / "fig2_eta_threshold.png"
+    pdf = outdir / "fig2_eta_threshold.pdf"
+    fig.savefig(png, dpi=300)
+    fig.savefig(pdf)
+    plt.close(fig)
+    return [png, pdf]
+
+
 def resolve_results_path(path: Path) -> Path:
     if path.exists():
         return path
-    fallback = path.with_name("results_master.csv")
-    if fallback.exists():
-        return fallback
-    raise FileNotFoundError(f"Could not find results file at {path} or {fallback}.")
+    raise FileNotFoundError(f"Could not find results file at {path}.")
 
 
 def main() -> None:
@@ -281,14 +464,12 @@ def main() -> None:
     configure_matplotlib(jp_font)
 
     df = pd.read_csv(results_path)
-    etas = [0.6, 0.8, 0.9]
-    subset = select_main_result_rows(df, etas)
-    print_main_result_rows(subset)
+    subset = prepare_eta_threshold_rows(df)
+    if args.include_architecture_diagram:
+        plot_architecture_diagram(outdir)
     if args.include_method_diagram:
         plot_method_diagram(outdir, jp_font)
-    paths = plot_main_result_eta_sweep(
-        subset, outdir, etas, has_topology="topology" in df.columns
-    )
+    paths = plot_eta_threshold(subset, outdir)
     for path in paths:
         print(f"Wrote {path} (exists: {path.exists()})")
 

@@ -1,12 +1,12 @@
 {
-  "availability_mean": 0.0,
+  "availability_mean": 0.025,
   "key_bits_per_pair": 1.0,
   "seeds": [
     11
   ],
   "pair_mode": "fixed",
-  "src_nodes": "1",
-  "dst_nodes": "14",
+  "src_nodes": "A",
+  "dst_nodes": "B",
   "targets": {
     "0.9": false,
     "0.99": false,

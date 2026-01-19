@@ -1,2 +1,2 @@
 request_success_rate,n_requests,n_success,mean_finish_time_for_success
-0.0,200,0,
+0.02,200,4,0.08174535916686254
