@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--results",
         type=Path,
-        default=Path("out/paper_artifacts/results_eta_threshold.csv"),
+        default=Path("out/paper_artifacts/eta_threshold/results_eta_threshold.csv"),
         help="Path to results_eta_threshold.csv.",
     )
     parser.add_argument(
@@ -69,15 +69,15 @@ def configure_matplotlib(jp_font: str | None) -> None:
     plt.rcParams.update(
         {
             "font.family": font_family,
-            "font.size": 12,
-            "axes.titlesize": 13,
-            "axes.labelsize": 12,
-            "xtick.labelsize": 11,
-            "ytick.labelsize": 11,
-            "legend.fontsize": 11,
+            "font.size": 14,
+            "axes.titlesize": 15,
+            "axes.labelsize": 14,
+            "xtick.labelsize": 13,
+            "ytick.labelsize": 13,
+            "legend.fontsize": 13,
             "axes.linewidth": 1.0,
-            "lines.linewidth": 1.6,
-            "lines.markersize": 6,
+            "lines.linewidth": 2.0,
+            "lines.markersize": 7,
             "axes.unicode_minus": False,
         }
     )
@@ -95,7 +95,7 @@ def draw_box(
     facecolor: str = "#f8fafc",
     edgecolor: str = "#1f2937",
     linestyle: str | tuple = "solid",
-    linewidth: float = 1.2,
+    linewidth: float = 1.5,
 ) -> dict:
     box = FancyBboxPatch(
         (x, y),
@@ -144,7 +144,7 @@ def arrow_between(ax: plt.Axes, start: dict, end: dict) -> None:
         "",
         xy=end_pt,
         xytext=start_pt,
-        arrowprops=dict(arrowstyle="-|>", color="#1f2937", linewidth=1.2, mutation_scale=14),
+        arrowprops=dict(arrowstyle="-|>", color="#1f2937", linewidth=1.5, mutation_scale=16),
     )
 
 
@@ -243,7 +243,7 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
     ax.axis("off")
 
     title = "（a）SeQUeNCe拡張アーキテクチャ"
-    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=12, weight="bold")
+    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=14, weight="bold")
 
     layer_x = 0.05
     layer_w = 0.9
@@ -256,29 +256,29 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
 
     layers = [
         {
-            "title": "アプリ層 (Application)",
-            "modules": [("QKD要求生成\n（締切）", True)],
+            "title": "アプリ層（Application）",
+            "modules": [("QKD要求生成", True)],
         },
         {
-            "title": "制御・プロトコル層\n(Control/Protocol)",
+            "title": "制御・プロトコル層\n（Control/Protocol）",
             "modules": [
-                ("戦略選択\n(BK/EQT)", True),
-                ("テレポート経路", True),
-                ("トランスデューサ\nリンク", True),
+                ("戦略選択", True),
+                ("テレポート\n経路", True),
+                ("トランス\nデューサ", True),
             ],
         },
         {
-            "title": "シミュレータ・コア\n(Simulator)",
+            "title": "シミュレータ・コア\n（Simulator）",
             "modules": [
                 ("イベント\nスケジューラ", False),
                 ("エンタングルメント\n資源", False),
             ],
         },
         {
-            "title": "出力・評価\n(Output/Eval)",
+            "title": "出力・評価\n（Output/Eval）",
             "modules": [
-                ("要求ログ出力", True),
-                ("requests.csv\n正規化", True),
+                ("ログ出力", True),
+                ("CSV正規化", True),
                 ("可用性集計", True),
             ],
         },
@@ -296,7 +296,7 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
             facecolor="#f8fafc",
         )
         ax.add_patch(bg)
-        ax.text(title_x, y + layer_h - 0.04, layer["title"], ha="left", va="top", fontsize=10)
+        ax.text(title_x, y + layer_h - 0.04, layer["title"], ha="left", va="top", fontsize=12)
 
         modules = layer["modules"]
         n = len(modules)
@@ -313,7 +313,7 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
                 module_w,
                 module_h,
                 label_text,
-                text_kwargs={"fontsize": 9},
+                text_kwargs={"fontsize": 14},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle=(0, (4, 2)) if is_added else "solid",
@@ -338,7 +338,7 @@ def draw_architecture_panel(ax: plt.Axes, jp_font: str | None) -> None:
             linestyle=linestyle,
         )
         ax.add_patch(patch)
-        ax.text(lx + 0.14, legend_y + 0.025, label, ha="left", va="center", fontsize=9)
+        ax.text(lx + 0.14, legend_y + 0.025, label, ha="left", va="center", fontsize=12)
 
 
 def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
@@ -347,14 +347,14 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
     ax.axis("off")
 
     title = "（b）評価ワークフロー（データフロー）"
-    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=12, weight="bold")
+    ax.text(0.02, 0.98, title, ha="left", va="top", fontsize=14, weight="bold")
 
     labels_jp = [
         "パラメータ設定\n(トポロジ, η,\nシード, 要求数)",
         "qn_entanglement\n_service_availability.py\n実行",
-        "要求ログ\n(arrival, deadline,\nserved, t_done)",
+        "要求ログCSV\n(arrival, deadline,\nserved, t_done)",
         "requests.csvへ\n正規化",
-        "compute_availability.py\n→ per-seed summary",
+        "compute_availability.py\n→ seed別summary",
         "集計 → results_eta_threshold.csv\n+ Fig.2",
     ]
     labels_en = [
@@ -385,7 +385,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
                 width,
                 height,
                 label,
-                text_kwargs={"fontsize": 9},
+                text_kwargs={"fontsize": 14},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle="solid",
@@ -401,7 +401,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
                 width,
                 height,
                 label,
-                text_kwargs={"fontsize": 9},
+                text_kwargs={"fontsize": 14},
                 facecolor="#ffffff",
                 edgecolor="#111827",
                 linestyle="solid",
@@ -413,7 +413,7 @@ def draw_workflow_panel(ax: plt.Axes, jp_font: str | None) -> None:
 
 
 def plot_architecture_diagram(outdir: Path, jp_font: str | None) -> list[Path]:
-    fig = plt.figure(figsize=(4.2, 6.2))
+    fig = plt.figure(figsize=(4.6, 6.6))
     gs = fig.add_gridspec(2, 1, height_ratios=[1.1, 1.0], hspace=0.08)
     ax_top = fig.add_subplot(gs[0])
     ax_bottom = fig.add_subplot(gs[1])
@@ -566,32 +566,54 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
         )
 
     eta_equal, eta_sig = compute_eta_thresholds(subset)
-    eta_star = eta_sig if eta_sig is not None else eta_equal
-    if eta_star is not None:
-        ax.axvline(eta_star, color="#111827", linestyle="--", linewidth=1.2)
-        label = "eta* (sig)" if eta_sig is not None else "eta* (mean)"
+    if eta_equal is not None:
+        ax.axvline(eta_equal, color="#111827", linestyle="--", linewidth=1.2)
         ax.text(
-            eta_star,
+            eta_equal,
             0.98,
-            label,
+            "η_equal",
             rotation=90,
             va="top",
             ha="right",
-            fontsize=10,
+            fontsize=12,
             transform=ax.get_xaxis_transform(),
         )
-
-    tick_vals = [1e-5, 1e-3, 1e-2, 0.03, 0.1, 0.3, 0.5, 0.8]
-    tick_labels = {
-        1e-5: "1e-5",
-        1e-3: "1e-3",
-        1e-2: "1e-2",
-        0.03: "0.03",
-        0.1: "0.1",
-        0.3: "0.3",
-        0.5: "0.5",
-        0.8: "0.8",
-    }
+    if eta_sig is not None and (eta_equal is None or abs(eta_sig - eta_equal) > 1e-12):
+        ax.axvline(eta_sig, color="#111827", linestyle=":", linewidth=1.2)
+        ax.text(
+            eta_sig,
+            0.98,
+            "η_sig",
+            rotation=90,
+            va="top",
+            ha="right",
+            fontsize=12,
+            transform=ax.get_xaxis_transform(),
+        )
+    candidate_ticks = [0.01, 0.03, 0.05, 0.1, 0.15, 0.3, 0.5, 0.8]
+    etas = sorted(subset["eta"].unique())
+    measured_eta = 0.30
+    if min(etas) <= measured_eta <= max(etas):
+        ax.axvline(measured_eta, color="#6b7280", linestyle="-.", linewidth=1.2)
+        ax.text(
+            measured_eta,
+            0.02,
+            "実測例\n(≈0.30)",
+            rotation=90,
+            va="bottom",
+            ha="right",
+            fontsize=12,
+            transform=ax.get_xaxis_transform(),
+        )
+    tick_vals = [
+        val
+        for val in candidate_ticks
+        if min(etas) <= val <= max(etas) and any(abs(val - eta) < 1e-9 for eta in etas)
+    ]
+    if len(tick_vals) < 3:
+        step = max(1, len(etas) // 6)
+        tick_vals = etas[::step]
+    tick_labels = {val: f"{val:g}" for val in tick_vals}
 
     ymax = float(subset["ci95_high"].max())
     if ymax <= 0:
@@ -600,7 +622,7 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
         ymax = min(1.0, ymax * 1.4)
 
     ax.set_xscale("log")
-    ax.set_xlim(min(tick_vals), max(tick_vals))
+    ax.set_xlim(min(tick_vals) * 0.9, max(tick_vals) * 1.1)
     ax.set_xticks(tick_vals)
     ax.set_xticklabels([tick_labels.get(val, f"{val:g}") for val in tick_vals])
     ax.set_ylim(0, ymax)
@@ -608,20 +630,8 @@ def plot_eta_threshold(subset: pd.DataFrame, outdir: Path) -> list[Path]:
     ax.set_ylabel("Availability (deadline success rate)")
     ax.legend(frameon=False, ncol=2, loc="upper left")
     ax.set_axisbelow(True)
-    ax.yaxis.grid(True, linestyle=":", linewidth=0.8, color="#b0b0b0")
-    ax.xaxis.grid(False)
-
-    ax.axvline(0.30, color="#374151", linestyle=":", linewidth=1.2)
-    ax.text(
-        0.30,
-        0.92,
-        "実測例 (≈0.30)",
-        rotation=90,
-        va="top",
-        ha="right",
-        fontsize=10,
-        transform=ax.get_xaxis_transform(),
-    )
+    ax.yaxis.grid(True, linestyle=":", linewidth=0.9, color="#b0b0b0")
+    ax.xaxis.grid(True, linestyle=":", linewidth=0.6, color="#e5e7eb")
 
     fig.tight_layout(pad=0.2)
 

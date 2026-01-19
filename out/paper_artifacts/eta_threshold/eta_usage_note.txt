@@ -1,0 +1,11 @@
+eta usage note
+- file: /home/al22085/workspace/SeQUeNCe/sequence/qn/strategy_params.py
+- function: edge_params_for_strategy
+- EQT uses eta^2 scaling (base_prob * eta * eta).
+- DQT uses eta scaling (base_prob * eta).
+- BK does not include eta (base_prob only).
+
+Line references (1-based)
+- EQT branch: line 39, calc line 40
+- DQT branch: line 45, calc line 40
+- BK branch: line 51, calc line 52

@@ -1,0 +1,6 @@
+eta_threshold_report
+eta_equal: 0.01
+eta_sig: 0.01
+measured_eta: 0.3
+BK_at_measured: 0.0218
+EQT_at_measured: 0.0325
