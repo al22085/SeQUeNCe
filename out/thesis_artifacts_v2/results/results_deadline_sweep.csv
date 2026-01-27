@@ -1,0 +1,13 @@
+study,scenario,eta,tau_s,deadline_scale_vs_5s,n_seeds,n_requests_total,mean_success_rate,served_rate,miss_deadline_rate_given_served,mean_slack_for_success
+study_deadline_sweep,BK,0.03,0.1,0.02,30,6000,0.0,0.0,0.0,
+study_deadline_sweep,BK,0.03,0.5,0.1,30,6000,0.0,0.0,0.0,
+study_deadline_sweep,BK,0.03,1.0,0.2,30,6000,0.003,0.003,0.0,0.13042383769682908
+study_deadline_sweep,BK,0.03,2.5,0.5,30,6000,0.01,0.01,0.0,0.9349944184190548
+study_deadline_sweep,BK,0.03,5.0,1.0,30,6000,0.021833333333333333,0.021833333333333333,0.0,2.2092843481314572
+study_deadline_sweep,BK,0.03,10.0,2.0,30,6000,0.04633333333333333,0.04633333333333333,0.0,4.663839954345161
+study_deadline_sweep,EQT,0.03,0.1,0.02,30,6000,0.0,0.0,0.0,
+study_deadline_sweep,EQT,0.03,0.5,0.1,30,6000,0.001,0.001,0.0,0.010785768956231742
+study_deadline_sweep,EQT,0.03,1.0,0.2,30,6000,0.005,0.005,0.0,0.2865635543038696
+study_deadline_sweep,EQT,0.03,2.5,0.5,30,6000,0.015666666666666666,0.015666666666666666,0.0,1.0381880627917204
+study_deadline_sweep,EQT,0.03,5.0,1.0,30,6000,0.0325,0.0325,0.0,2.334208916894254
+study_deadline_sweep,EQT,0.03,10.0,2.0,30,6000,0.06833333333333334,0.06833333333333334,0.0,4.75396954468865

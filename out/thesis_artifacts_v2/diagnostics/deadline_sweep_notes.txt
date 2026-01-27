@@ -1,0 +1,7 @@
+Deadline sweep summary (nsfnet, eta=0.03, BK/EQT, seeds 0–29, 200 req/seed)
+
+- tau_s swept: 0.1, 0.5, 1.0, 2.5, 5.0, 10.0 (scale vs 5s: 0.02–2.0).
+- Observed: mean_success_rate increases monotonically with tau_s for both BK and EQT.
+- served_rate == mean_success_rate and miss_deadline_rate_given_served == 0 across all tau_s.
+  → In this model, any served request completes before its deadline; the deadline gate mainly controls whether a request is served at all.
+- For very small tau_s (0.1–0.5s), success is near 0 (especially BK), indicating the deadline is binding in this regime.

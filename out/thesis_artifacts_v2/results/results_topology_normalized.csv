@@ -1,0 +1,7 @@
+study,topology,scenario,eta,tau_s,n_seeds,n_requests_total,mean_success_rate,served_rate,miss_deadline_rate_given_served,mean_slack_for_success
+study_topology_normalized,NSFNET13,BK,0.03,0.05,10,2000,0.0,0.0,0.0,
+study_topology_normalized,NSFNET13,EQT,0.03,0.05,10,2000,0.0,0.0,0.0,
+study_topology_normalized,TOP_0_SANET,BK,0.03,0.003024,10,2000,0.0,0.0,0.0,
+study_topology_normalized,TOP_0_SANET,EQT,0.03,0.003024,10,2000,0.0,0.0,0.0,
+study_topology_normalized,TOP_103_GEANT,BK,0.03,0.041296,10,2000,0.0,0.0,0.0,
+study_topology_normalized,TOP_103_GEANT,EQT,0.03,0.041296,10,2000,0.0,0.0,0.0,

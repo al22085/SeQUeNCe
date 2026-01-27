@@ -1,0 +1,6 @@
+Upgrade‑k usage notes (nsfnet, eta=0.03, seeds 0–29, src=12 dst=13, shortestpath_count policy)
+
+- For k = 1,2,4,8 the chosen upgraded edges do **not** overlap the fixed path between src=12 and dst=13.
+- As a result, path_edges_upgraded == 0 for all seeds and k, and eg_success_upgraded == 0 (upgrade activation fraction = 0).
+- This explains why EQT_UPGRADE does not improve availability under the fixed-pair baseline: the upgraded edges are off-path.
+- “Transducer allocation failures / utilization” are not modeled in the entanglement-service abstraction; reported as 0 / N/A.

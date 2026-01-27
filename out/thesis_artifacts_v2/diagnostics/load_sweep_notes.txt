@@ -1,0 +1,6 @@
+Offered-load sweep summary (nsfnet, eta=0.03, BK/EQT, seeds 0–29, tau_s=5.0)
+
+- Arrival interval swept: 0.00025, 0.0005, 0.001, 0.002 s (requests/seed = 400, 200, 100, 50).
+- Success rate increases as load decreases for both BK and EQT (roughly linear with 1/load).
+- served_rate == mean_success_rate and miss_deadline_rate_given_served == 0 across all loads.
+  → Once a request is served, it consistently finishes before its deadline; low availability is dominated by inability to serve under higher load, not deadline misses.
