@@ -1,0 +1,36 @@
+{
+  "availability_mean": 0.035,
+  "key_bits_per_pair": 1.0,
+  "seeds": [
+    21
+  ],
+  "pair_mode": "fixed",
+  "src_nodes": "12",
+  "dst_nodes": "13",
+  "targets": {
+    "0.9": false,
+    "0.99": false,
+    "0.999": false
+  },
+  "distance_dataset_id": "sndlib_great_circle_heuristic",
+  "upgrade_edges": [
+    [
+      "10",
+      "8"
+    ],
+    [
+      "11",
+      "9"
+    ],
+    [
+      "6",
+      "8"
+    ],
+    [
+      "7",
+      "9"
+    ]
+  ],
+  "strategy": "EQT",
+  "eta": 0.03
+}

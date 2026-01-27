@@ -1,0 +1,38 @@
+Consistency report: baseline vs upgrade-k (eta=0.03)
+
+Baseline config:
+- study: baseline (eta=0.03)
+- topology: nsfnet
+- edge_distance_source: sndlib_great_circle_heuristic
+- segment_length_km: 50.0
+- pair_mode: fixed
+- src_node: 12
+- dst_node: 13
+- arrival_interval_s: 0.0005
+- horizon_s: 0.1
+- deadline_window_s: 5.0
+- key_bits_per_pair: 1.0
+- bits_needed: 20.0
+- seeds: 0..29
+- requests_per_seed: 200
+- strategy_knobs: {'attempt_rate_opt_hz': 1000.0, 'attempt_rate_sc_hz': 1000.0, 'p_bsm_opt': 0.9, 'p_bsm_sc': 0.95, 'coherence_opt_s': 0.02, 'coherence_sc_s': 0.03, 'swap_latency_s': 0.0, 'transduction_latency_s': 0.0, 'loss_db_per_km': 0.2, 'p_eg_per_km': None}
+
+Upgrade-k config:
+- study: upgrade_k (eta=0.03, baseline-matched)
+- topology: nsfnet
+- edge_distance_source: sndlib_great_circle_heuristic
+- segment_length_km: 50.0
+- pair_mode: fixed
+- src_node: 12
+- dst_node: 13
+- arrival_interval_s: 0.0005
+- horizon_s: 0.1
+- deadline_window_s: 5.0
+- key_bits_per_pair: 1.0
+- bits_needed: 20.0
+- seeds: 0..29
+- requests_per_seed: 200
+- upgrade_k_list: [1, 2, 4, 8]
+- strategy_knobs: {'attempt_rate_opt_hz': 1000.0, 'attempt_rate_sc_hz': 1000.0, 'p_bsm_opt': 0.9, 'p_bsm_sc': 0.95, 'coherence_opt_s': 0.02, 'coherence_sc_s': 0.03, 'swap_latency_s': 0.0, 'transduction_latency_s': 0.0, 'loss_db_per_km': 0.2, 'p_eg_per_km': None}
+
+Config comparison: IDENTICAL

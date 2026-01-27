@@ -1,0 +1,5 @@
+Consistency check: results_upgrade_k vs results_baseline (eta=0.03)
+Tolerance: 1e-06
+BK baseline=0.021833, upgrade_k=0.021833, pass=True
+EQT baseline=0.032500, upgrade_k=0.032500, pass=True
+OVERALL: PASS

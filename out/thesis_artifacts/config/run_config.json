@@ -48,7 +48,7 @@
       "requests_per_seed": 200,
       "arrival_interval_s": 0.0005,
       "horizon_s": 0.1,
-      "deadline_window_s": 0.05,
+      "deadline_window_s": 5.0,
       "bits_needed": 20.0,
       "topology": "nsfnet"
     },
