@@ -1,0 +1,6 @@
+Diagnosis summary (eta-insensitivity):
+- EQT served_rate span across eta: 0.032500..0.032500 (Δ=0.000000)
+- EQT miss_deadline_rate_given_served span across eta: 0.000000..0.000000 (Δ=0.000000)
+- EQT mean_slack_for_success span across eta: 2.329528..2.329528 (Δ=0.000000)
+- EQT mean_t_done_for_success span across eta: 2.672531..2.672531 (Δ=0.000000)
+- Baseline EQT @ eta=0.03: served_rate=0.032500, miss_deadline_rate_given_served=0.000000, mean_slack_for_success=2.329528, mean_t_done_for_success=2.672531

@@ -1,0 +1,7 @@
+study,topology,scenario,eta,k,n_seeds,n_requests_total,mean_success_rate,std_success_rate,ci95_low,ci95_high
+study_topology_sweep,NSFNET13,BK,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_topology_sweep,NSFNET13,EQT,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_topology_sweep,TOP_0_SANET,BK,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_topology_sweep,TOP_0_SANET,EQT,0.030000,0,30,6000,0.000167,0.000913,0.000000,0.000493
+study_topology_sweep,TOP_103_GEANT,BK,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_topology_sweep,TOP_103_GEANT,EQT,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000

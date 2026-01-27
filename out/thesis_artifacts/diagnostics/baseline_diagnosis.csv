@@ -1,0 +1,4 @@
+scenario,eta,n_requests_total,served_rate,miss_deadline_rate_given_served,mean_slack_for_success,mean_t_done_for_success
+BK,0.030000,6000,0.021833,0.000000,2.203016,2.799197
+DQT,0.030000,6000,0.032500,0.000000,2.329528,2.672531
+EQT,0.030000,6000,0.032500,0.000000,2.329528,2.672531

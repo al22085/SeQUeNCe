@@ -1,0 +1,70 @@
+{
+  "workers": 20,
+  "studies": {
+    "eta_threshold": {
+      "etas": [
+        0.01,
+        0.03,
+        0.05,
+        0.1,
+        0.15,
+        0.3,
+        0.5,
+        0.8
+      ],
+      "seeds": 30,
+      "requests_per_seed": 200,
+      "arrival_interval_s": 0.0005,
+      "horizon_s": 0.1,
+      "deadline_window_s": 5.0,
+      "bits_needed": 20.0,
+      "topology": "nsfnet",
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13"
+    },
+    "baseline": {
+      "eta": 0.03,
+      "seeds": 30,
+      "requests_per_seed": 200,
+      "arrival_interval_s": 0.0005,
+      "horizon_s": 0.1,
+      "deadline_window_s": 5.0,
+      "bits_needed": 20.0,
+      "topology": "nsfnet",
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13"
+    },
+    "upgrade_k": {
+      "eta": 0.03,
+      "k_list": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "seeds": 30,
+      "requests_per_seed": 200,
+      "arrival_interval_s": 0.0005,
+      "horizon_s": 0.1,
+      "deadline_window_s": 0.05,
+      "bits_needed": 20.0,
+      "topology": "nsfnet"
+    },
+    "topology_sweep": {
+      "eta": 0.03,
+      "topologies": [
+        "NSFNET13",
+        "TOP_0_SANET",
+        "TOP_103_GEANT"
+      ],
+      "seeds": 30,
+      "requests_per_seed": 200,
+      "arrival_interval_s": 0.0005,
+      "horizon_s": 0.1,
+      "deadline_window_s": 0.05,
+      "bits_needed": 20.0
+    }
+  }
+}

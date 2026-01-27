@@ -1,0 +1,2 @@
+scenario,eta,n_seeds,n_requests_total,mean_success_rate,std_success_rate,ci95_low,ci95_high
+,0.030000,30,6000,0.032500,0.003149,0.031373,0.033627

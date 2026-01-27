@@ -1,0 +1,7 @@
+study,topology,scenario,eta,k,n_seeds,n_requests_total,mean_success_rate,std_success_rate,ci95_low,ci95_high
+study_upgrade_k,nsfnet,BK,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_upgrade_k,nsfnet,EQT,0.030000,0,30,6000,0.000000,0.000000,0.000000,0.000000
+study_upgrade_k,nsfnet,EQT_UPGRADE,0.030000,1,30,6000,0.000000,0.000000,0.000000,0.000000
+study_upgrade_k,nsfnet,EQT_UPGRADE,0.030000,2,30,6000,0.000000,0.000000,0.000000,0.000000
+study_upgrade_k,nsfnet,EQT_UPGRADE,0.030000,4,30,6000,0.000000,0.000000,0.000000,0.000000
+study_upgrade_k,nsfnet,EQT_UPGRADE,0.030000,8,30,6000,0.000000,0.000000,0.000000,0.000000
