@@ -1,0 +1,4 @@
+study,topology,scenario,eta,k,n_seeds,n_requests_total,mean_success_rate,std_success_rate,ci95_low,ci95_high
+study_transducer_availability,nsfnet,BK,0.030000,0,30,6000,0.021833,0.002780,0.020838,0.022828
+study_transducer_availability,nsfnet,DQT,0.030000,0,30,6000,0.032500,0.003149,0.031373,0.033627
+study_transducer_availability,nsfnet,EQT,0.030000,0,30,6000,0.032500,0.003149,0.031373,0.033627

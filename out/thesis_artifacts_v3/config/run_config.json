@@ -1,0 +1,319 @@
+{
+  "generated_by": "thesis_artifacts_v3",
+  "defaults": {
+    "attempt_rate_opt_hz": 1000.0,
+    "attempt_rate_sc_hz": 1000.0,
+    "p_bsm_opt": 0.9,
+    "p_bsm_sc": 0.95,
+    "coherence_opt_s": 0.02,
+    "coherence_sc_s": 0.03,
+    "swap_latency_s": 0.0,
+    "transduction_latency_s": 0.0,
+    "loss_db_per_km": 0.2,
+    "p_eg_per_km": null,
+    "p_eg_floor": 1e-06,
+    "segment_length_km": 50.0,
+    "upgrade_policy": "shortestpath_count",
+    "upgrade_mode": "edges",
+    "pair_mode": "fixed",
+    "otp_data_rate_bps": 1000.0,
+    "otp_session_duration_s": 0.01,
+    "otp_directions": 2
+  },
+  "experiments": {
+    "eta_threshold": {
+      "source_results": "out/thesis_artifacts/results/results_eta_threshold.csv",
+      "topologies": [
+        "nsfnet"
+      ],
+      "etas": [
+        0.01,
+        0.03,
+        0.05,
+        0.1,
+        0.15,
+        0.3,
+        0.5,
+        0.8
+      ],
+      "strategies": [
+        "BK",
+        "EQT"
+      ],
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+      ],
+      "arrival_interval_s": 0.0005000000000000004,
+      "horizon_s": 0.1,
+      "tau_s": 0.05,
+      "requests_per_seed": 200,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "A",
+      "dst_node": "B",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "baseline": {
+      "source_results": "out/thesis_artifacts/results/results_baseline.csv",
+      "topologies": [
+        "nsfnet"
+      ],
+      "etas": [
+        0.03
+      ],
+      "strategies": [
+        "BK",
+        "DQT",
+        "EQT"
+      ],
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+      ],
+      "arrival_interval_s": 0.0005000000000000004,
+      "horizon_s": 0.1,
+      "tau_s": 5.0,
+      "requests_per_seed": 200,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "deadline_sweep": {
+      "source_results": "out/thesis_artifacts_v2/results/results_deadline_sweep.csv",
+      "etas": [
+        0.03
+      ],
+      "strategies": [
+        "BK",
+        "EQT"
+      ],
+      "tau_s_list": [
+        0.1,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0
+      ],
+      "seeds": [],
+      "arrival_interval_s": 0.0005000000000000004,
+      "horizon_s": 0.1,
+      "requests_per_seed": 200,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "load_sweep": {
+      "source_results": "out/thesis_artifacts_v2/results/results_load_sweep.csv",
+      "etas": [
+        0.03
+      ],
+      "strategies": [
+        "BK",
+        "EQT"
+      ],
+      "arrival_interval_s_list": [
+        0.00025,
+        0.0005,
+        0.001,
+        0.002
+      ],
+      "requests_per_seed_list": [
+        50,
+        100,
+        200,
+        400
+      ],
+      "arrival_interval_to_requests": [
+        {
+          "arrival_interval_s": 0.00025,
+          "requests_per_seed": 400
+        },
+        {
+          "arrival_interval_s": 0.0005,
+          "requests_per_seed": 200
+        },
+        {
+          "arrival_interval_s": 0.001,
+          "requests_per_seed": 100
+        },
+        {
+          "arrival_interval_s": 0.002,
+          "requests_per_seed": 50
+        }
+      ],
+      "seeds": [],
+      "tau_s": 5.0,
+      "horizon_s": 0.1,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "topology_normalized": {
+      "source_results": "out/thesis_artifacts_v2/results/results_topology_normalized.csv",
+      "topologies": [
+        "NSFNET13",
+        "TOP_0_SANET",
+        "TOP_103_GEANT"
+      ],
+      "topology_tau_s": [
+        {
+          "topology": "NSFNET13",
+          "tau_s": 0.05
+        },
+        {
+          "topology": "TOP_0_SANET",
+          "tau_s": 0.003024
+        },
+        {
+          "topology": "TOP_103_GEANT",
+          "tau_s": 0.041296
+        }
+      ],
+      "etas": [
+        0.03
+      ],
+      "strategies": [
+        "BK",
+        "EQT"
+      ],
+      "seeds": [],
+      "arrival_interval_s": 0.0005000000000000004,
+      "horizon_s": 0.1,
+      "requests_per_seed": 200,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "1",
+      "dst_node": "14",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "upgrade_k_usage": {
+      "source_results": "out/thesis_artifacts_v2/diagnostics/upgrade_k_usage.csv",
+      "etas": [
+        0.03
+      ],
+      "strategies": [
+        "EQT_UPGRADE"
+      ],
+      "upgrade_k_list": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "seeds": [],
+      "arrival_interval_s": 0.0005000000000000004,
+      "horizon_s": 0.1,
+      "tau_s": 5.0,
+      "requests_per_seed": 200,
+      "bits_needed": 20.0,
+      "pair_mode": "fixed",
+      "src_node": "12",
+      "dst_node": "13",
+      "distance_dataset_id": "sndlib_great_circle_heuristic",
+      "key_bits_per_pair": 1.0,
+      "lambda_req": null
+    },
+    "eta_to_peg": {
+      "source_results": "out/thesis_artifacts_v2/diagnostics/eta_to_peg.csv",
+      "etas": [
+        0.01,
+        0.03,
+        0.05,
+        0.1,
+        0.3,
+        0.8
+      ],
+      "distance_km": [
+        50.0
+      ],
+      "strategies": [
+        "BK",
+        "DQT",
+        "EQT"
+      ],
+      "base_prob": [
+        0.0999999999999999
+      ],
+      "p_eg_floor": [
+        1e-06
+      ],
+      "loss_db_per_km": [
+        0.2
+      ]
+    }
+  }
+}

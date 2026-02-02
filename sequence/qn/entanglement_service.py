@@ -97,6 +97,9 @@ def simulate_entanglement_service(
         "swap_levels": 0,
         "num_segments": len(edges),
     }
+    if debug_stats:
+        # Optional per-edge EG success counts for diagnostics.
+        stats["eg_success_by_edge"] = {e: 0 for e in edges}
 
     # schedule initial entanglement successes using Poisson thinning:
     # attempts ~ Poisson(R), success prob p_eg => successes ~ Poisson(R*p_eg) (exact).
@@ -227,6 +230,8 @@ def simulate_entanglement_service(
             edge = payload
             params = edge_params[edge]
             stats["eg_success_events"] += 1
+            if debug_stats:
+                stats["eg_success_by_edge"][edge] = stats["eg_success_by_edge"].get(edge, 0) + 1
             rate_succ = params.attempt_rate_hz * params.p_eg
             if rate_succ > 0:
                 next_t = now + _sample_exp(rng, rate_succ)
