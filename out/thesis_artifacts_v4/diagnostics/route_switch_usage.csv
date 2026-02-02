@@ -1,0 +1,4 @@
+seed,scenario,eta,route_search_attempts,fallback_triggered
+0,BK,0.03,1,0
+1,BK,0.03,1,0
+2,BK,0.03,1,0
