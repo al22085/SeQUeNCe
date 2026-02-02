@@ -44,3 +44,9 @@ This pack targets professor concerns (1)-(7) from the request. Paths are relativ
 - `out/thesis_artifacts_v4/diagnostics/switching_semantics.md` — route re-search / switching audit + conclusions.
 - `out/thesis_artifacts_v4/diagnostics/teleport_activation.csv` — per-seed teleport activation evidence.
 
+## Eta sweep extension (<0.01)
+- `out/thesis_artifacts_v4/results/results_eta_threshold_ext.csv` — eta sweep with added points below 0.01.
+- `out/thesis_artifacts_v4/figures/fig_eta_threshold_curve_ext.pdf` (+`.png`) — extended curve (log‑x).
+- `out/thesis_artifacts_v4/diagnostics/eta_star_definition.md` — eta* definition + supported wording.
+- Recommended wording update: eta* is in (0.003, 0.01] based on tested points; “eta* < 0.01” is supported, but not below 0.003 without more tests.
+
