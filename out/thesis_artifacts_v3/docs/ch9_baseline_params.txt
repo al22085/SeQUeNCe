@@ -1,0 +1,13 @@
+Chapter 9 baseline parameters (from run_config.json)
+eta: [0.03]
+arrival_interval_s: 0.0005000000000000004
+tau_s: 5.0
+requests_per_seed: 200
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+horizon_s: 0.1
+bits_needed: 20.0
+pair_mode: fixed
+src_node: 12
+dst_node: 13
+strategies: ['BK', 'DQT', 'EQT']
+distance_dataset_id: sndlib_great_circle_heuristic
