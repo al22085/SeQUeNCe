@@ -1,17 +1,15 @@
-# Teleport activation notes (Chapter 9 experiments)
+# Teleport activation notes (EQT runs)
 
-Summary:
-- **Teleportation protocol exists in SeQUeNCe** (e.g., `sequence/app/teleport_app.py`, `sequence/entanglement_management/teleportation.py`).
-- **The Chapter 9 entanglement-service availability experiments do not invoke TeleportApp/TeleportProtocol.**
-  The experiments use `scripts/qn_entanglement_service_availability.py` → `sequence/qn/entanglement_service.py`,
-  which models entanglement generation and swapping on a fixed path, not application-level teleportation.
+Observed result:
+- In the Chapter 9 entanglement‑service availability runs, **teleport activation is 0**.
+- `teleport_activation.csv` reports `n_requests_with_teleport = 0` and `teleport_request_fraction = 0` for all seeds/scenarios.
+- Path‑edge inspection also yields `path_edges_teleport = 0` (no teleport edges in the chosen path).
 
-Evidence:
-- `out/thesis_artifacts_v4/diagnostics/teleport_activation.csv` shows
-  `n_requests_using_teleport = 0` and `teleport_edge_fraction = 0` for all seeds/scenarios.
+Why teleportation does not fire here:
+- These experiments use `scripts/qn_entanglement_service_availability.py` → `sequence/qn/entanglement_service.py`,
+  which models entanglement generation + swapping on a fixed shortest path, not TeleportApp/TeleportProtocol.
+- As a result, **EQT does not invoke teleportation in this pipeline**; its effects are via strategy parameters (eta → p_eg).
 
-Interpretation:
-- **Teleportation did not “fire” in these experiments** because the availability simulator does not call
-  teleportation protocols; it only uses entanglement generation + swapping to accumulate key bits.
-- DQT≈EQT in some settings can occur because teleportation is not used; performance differences are driven by
-  p_eg and other strategy parameters, not teleport application events.
+Why DQT≈EQT can still occur:
+- Because teleportation is not exercised, performance differences are driven by p_eg scaling and other strategy knobs,
+  and can saturate or be masked by low offered load / tight deadline regimes.

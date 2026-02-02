@@ -123,15 +123,14 @@ def teleport_activation(config: dict, out_dir: Path) -> Path:
     dist_map = load_distance_dataset(distance_dataset_id)
     expanded_edges, _, _ = subdivide_edges(dist_map, segment_length_km=segment_length_km)
     path_edges = shortest_path_edges(expanded_edges, src, dst)
-    path_edge_total = len(path_edges)
+    path_edges_total = len(path_edges)
     teleport_edges = set()  # no teleport edges defined in qn_entanglement_service
-    teleport_on_path = 0
+    path_edges_teleport = 0
     if path_edges:
         for *_, orig in path_edges:
             if orig in teleport_edges:
-                teleport_on_path += 1
-    teleport_edge_fraction = (teleport_on_path / path_edge_total) if path_edge_total else 0.0
-    n_paths_with_teleport_edge = 1 if teleport_on_path > 0 else 0
+                path_edges_teleport += 1
+    teleport_edge_fraction = (path_edges_teleport / path_edges_total) if path_edges_total else 0.0
 
     rows = []
     for scenario, raw_path in iter_raw_logs():
@@ -159,9 +158,10 @@ def teleport_activation(config: dict, out_dir: Path) -> Path:
                 "n_requests": n_requests,
                 "n_served": n_served,
                 "n_success": n_success,
-                "n_requests_using_teleport": 0,
+                "n_requests_with_teleport": 0,
                 "teleport_request_fraction": 0.0,
-                "n_paths_with_teleport_edge": n_paths_with_teleport_edge,
+                "path_edges_total": path_edges_total,
+                "path_edges_teleport": path_edges_teleport,
                 "teleport_edge_fraction": teleport_edge_fraction,
             }
         )
@@ -177,9 +177,10 @@ def teleport_activation(config: dict, out_dir: Path) -> Path:
                 "n_requests",
                 "n_served",
                 "n_success",
-                "n_requests_using_teleport",
+                "n_requests_with_teleport",
                 "teleport_request_fraction",
-                "n_paths_with_teleport_edge",
+                "path_edges_total",
+                "path_edges_teleport",
                 "teleport_edge_fraction",
             ],
         )
