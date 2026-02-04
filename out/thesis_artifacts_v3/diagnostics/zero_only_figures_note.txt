@@ -1,0 +1,11 @@
+Zero-only figure verification (thesis_artifacts_v3)
+
+CSV columns checked:
+- upgrade_k_usage.csv: upgrade_activation_fraction, path_upgraded_fraction (grouped by upgrade_k)
+- results_topology_normalized.csv: mean_success_rate, served_rate (grouped by topology and scenario)
+
+Result:
+- Both diagnostics are all-zero under the thesis conditions.
+
+Recommendation:
+omit Fig9.5/Fig9.6 graphs in the thesis and state results in text
